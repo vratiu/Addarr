@@ -27,15 +27,15 @@ class TestEndToEndMiniAppFlow(unittest.TestCase):
             self.assertEqual(search_res["results"][0]["title"], "Dune")
 
         # 3. Quick-Add Action
-        with patch("bridge.radarr.addToLibrary", return_value=True) as mock_add:
+        with patch("bridge.radarr.addToLibrary", return_value=True) as mock_add, \
+             patch("bridge.radarr.getTags", return_value=[{"id": 1, "label": "telegram"}]):
             add_res = bridge.dispatch_action("add_movie", {
                 "tmdbId": 438631,
                 "path": "/movies",
                 "qualityProfileId": 1
             })
             self.assertTrue(add_res["success"])
-            default_tags = bridge.config.get("radarr", {}).get("defaultTags", [])
-            mock_add.assert_called_with(438631, "/movies", 1, default_tags)
+            mock_add.assert_called_with(438631, "/movies", 1, [1])
 
         # 4. View Library Summary Action
         with patch("bridge.radarr.get_library_summary", return_value=[{

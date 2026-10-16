@@ -63,7 +63,31 @@ def is_user_authorized(telegram_uid: str, username: Optional[str] = None, check_
     return True
 
 
-def dispatch_action(action: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+def _resolve_tags(service_module, service_cfg: Dict[str, Any], user_id: Optional[str] = None, raw_tags=None) -> list:
+    """Resolve tag labels or requester ID into integer tag IDs required by Radarr/Sonarr."""
+    if isinstance(raw_tags, list) and raw_tags and all(isinstance(t, int) for t in raw_tags):
+        return raw_tags
+
+    tags = []
+    try:
+        existing_tags = service_module.getTags() or []
+        if service_cfg.get("addRequesterIdTag") and user_id:
+            if str(user_id) not in [str(t.get("label")) for t in existing_tags]:
+                service_module.createTag(str(user_id))
+                existing_tags = service_module.getTags() or []
+            for t in existing_tags:
+                if str(t.get("label")) == str(user_id):
+                    tags.append(int(t["id"]))
+        if not tags:
+            label_list = raw_tags if raw_tags is not None else service_cfg.get("defaultTags", [])
+            if label_list:
+                tags = [int(t["id"]) for t in existing_tags if t.get("label") in label_list]
+    except Exception as e:
+        logger.warning(f"Could not resolve tags, defaulting to []: {e}")
+    return tags
+
+
+def dispatch_action(action: str, payload: Dict[str, Any], user_id: Optional[str] = None) -> Dict[str, Any]:
     """Execute action against local Sonarr/Radarr APIs and return data."""
     try:
         if action == "search_movie":
@@ -84,7 +108,7 @@ def dispatch_action(action: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             tmdb_id = payload.get("tmdbId")
             path = payload.get("path")
             quality_profile_id = payload.get("qualityProfileId")
-            tags = payload.get("tags", config.get("radarr", {}).get("defaultTags", []))
+            tags = _resolve_tags(radarr, config.get("radarr", {}), user_id=user_id, raw_tags=payload.get("tags"))
             success = radarr.addToLibrary(tmdb_id, path, quality_profile_id, tags)
             return {"success": bool(success)}
 
@@ -92,7 +116,7 @@ def dispatch_action(action: str, payload: Dict[str, Any]) -> Dict[str, Any]:
             tvdb_id = payload.get("tvdbId")
             path = payload.get("path")
             quality_profile_id = payload.get("qualityProfileId")
-            tags = payload.get("tags", config.get("sonarr", {}).get("defaultTags", []))
+            tags = _resolve_tags(sonarr, config.get("sonarr", {}), user_id=user_id, raw_tags=payload.get("tags"))
             seasons_selected = payload.get("seasonsSelected")
             if seasons_selected is None:
                 # default to all seasons monitored
@@ -170,7 +194,7 @@ def process_request(db_module, user_id: str, req_id: str, request_data: Dict[str
         logger.warning(f"Unauthorized bridge request from user_id={user_id}")
         response_payload = {"success": False, "error": "Unauthorized"}
     else:
-        response_payload = dispatch_action(action, payload)
+        response_payload = dispatch_action(action, payload, user_id=user_id)
 
     # Post response to /responses/{user_id}/{req_id}
     try:
