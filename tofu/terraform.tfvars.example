@@ -1,0 +1,10 @@
+# Google Cloud Project ID (Replace with your actual GCP Project ID)
+project_id = "my-addarr-project-12345"
+
+# Region settings (Defaulted to Europe)
+region        = "europe-west1"
+rtdb_location = "europe-west1"
+
+# App & Service Account naming
+app_display_name   = "Addarr Telegram Mini App"
+service_account_id = "addarr-homelab-bridge"

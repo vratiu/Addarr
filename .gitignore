@@ -19,3 +19,16 @@ allowlist.txt
 webapp/node_modules/
 webapp/dist/
 serviceAccountKey.json
+
+# OpenTofu / Terraform
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfvars
+!*.tfvars.example
+.terraform/
+.tofu/
+webapp/.env.production
+webapp/.env.local
+.firebase/
