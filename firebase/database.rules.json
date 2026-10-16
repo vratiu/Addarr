@@ -1,0 +1,25 @@
+{
+  "rules": {
+    "requests": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        ".write": "auth != null && auth.uid == $uid",
+        "$reqId": {
+          ".validate": "newData.hasChildren(['action', 'payload'])"
+        }
+      }
+    },
+    "responses": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        ".write": false
+      }
+    },
+    "users": {
+      "$uid": {
+        ".read": "auth != null && auth.uid == $uid",
+        ".write": "auth != null && auth.uid == $uid"
+      }
+    }
+  }
+}

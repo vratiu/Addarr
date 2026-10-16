@@ -159,3 +159,50 @@ def getDbIdFromImdbId(tmdbId):
     parsed_json = json.loads(req.text)
     dbId = [f["id"] for f in parsed_json if f["tmdbId"] == tmdbId]
     return dbId[0]
+
+
+def get_library_summary():
+    req = requests.get(commons.generateApiQuery("radarr", "movie", {}))
+    if req.status_code == 200:
+        parsed_json = json.loads(req.text)
+        data = []
+        for movie in parsed_json:
+            poster = None
+            for img in movie.get("images", []):
+                if img.get("coverType") == "poster":
+                    poster = img.get("remoteUrl") or img.get("url")
+                    break
+            data.append(
+                {
+                    "id": movie.get("id"),
+                    "tmdbId": movie.get("tmdbId"),
+                    "title": movie.get("title"),
+                    "year": movie.get("year"),
+                    "poster": poster or movie.get("remotePoster"),
+                    "qualityProfileId": movie.get("qualityProfileId"),
+                    "monitored": movie.get("monitored"),
+                    "status": movie.get("status"),
+                    "hasFile": movie.get("hasFile", False),
+                    "sizeOnDisk": movie.get("sizeOnDisk", 0),
+                }
+            )
+        return data
+    return False
+
+
+def update_movie(movie_id, quality_profile_id=None, monitored=None):
+    url = commons.generateApiQuery("radarr", f"movie/{movie_id}", {})
+    req = requests.get(url)
+    if req.status_code != 200:
+        return False
+    movie = json.loads(req.text)
+    if quality_profile_id is not None:
+        movie["qualityProfileId"] = int(quality_profile_id)
+    if monitored is not None:
+        movie["monitored"] = bool(monitored)
+
+    put_url = commons.generateApiQuery("radarr", f"movie/{movie_id}", {})
+    res = requests.put(put_url, json=movie, headers={'Content-Type': 'application/json'})
+    if res.status_code in (200, 202):
+        return json.loads(res.text) if res.text else True
+    return False

@@ -26,5 +26,12 @@ DEFAULT_SETTINGS = {
     "debugLogging": False,
     "language": "en-us",
     "transmission": { "enable": False },
-    "enableAdmin": False
+    "enableAdmin": False,
+    "miniapp": {
+        "enable": False,
+        "url": "",
+        "databaseURL": "",
+        "serviceAccountPath": "serviceAccountKey.json"
+    }
 }
+

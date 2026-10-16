@@ -4,12 +4,20 @@ WORKDIR /app
 
 # Install requirements
 RUN apk add --no-cache \
-            transmission-cli
+            transmission-cli \
+            gcc \
+            musl-dev \
+            libffi-dev \
+            openssl-dev
 
 # Copy files to container
 COPY . /app
 
-# Install ans build Addarr requirements, make symlink to redirect logs to stdout
-RUN	pip install --no-cache-dir -r requirements.txt --upgrade
+# Set default Google application credentials path
+ENV GOOGLE_APPLICATION_CREDENTIALS=/app/serviceAccountKey.json
+
+# Install and build Addarr requirements
+RUN pip install --no-cache-dir -r requirements.txt --upgrade
 
 ENTRYPOINT ["python", "/app/src/addarr.py"]
+

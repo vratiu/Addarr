@@ -8,7 +8,18 @@ import logger
 from commons import authentication, checkAllowed, checkId
 from config import config
 from translations import i18n
-from addarr import getService, clearUserData, stop
+
+def getService(context):
+    import addarr
+    return addarr.getService(context)
+
+def clearUserData(context):
+    import addarr
+    return addarr.clearUserData(context)
+
+def stop(update, context):
+    import addarr
+    return addarr.stop(update, context)
 
 
 

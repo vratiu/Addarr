@@ -92,3 +92,11 @@ enableAllowlist: false # Check allowlist.txt - very restrictive!
 logToConsole: true
 debugLogging: false
 adminNotifyId:
+
+# Telegram Mini App Configuration
+miniapp:
+  enable: false # Set true to enable Telegram Mini App bridge
+  url: "" # Hosted WebApp URL (e.g. https://your-project.web.app)
+  databaseURL: "" # Firebase Realtime Database URL
+  serviceAccountPath: "serviceAccountKey.json" # Relative or absolute path to service account JSON
+

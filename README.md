@@ -6,6 +6,7 @@ This is a Telegram Bot made to add series to [Sonarr](https://github.com/Sonarr/
 
 ## FEATURES
 
+- **Telegram Mini App (TMA)**: Visual media manager inside Telegram with poster walls, instant 1-tap quick add, and granular season & quality preference editor ([Setup Guide](docs/MINIAPP_SETUP.md))
 - Add series/movies to Sonarr/Radarr
 - Get a list of all the series on Sonarr
 - Change down-/uploadspeed of Transmission (Temporary Speed Limit)
@@ -23,7 +24,9 @@ This is a Telegram Bot made to add series to [Sonarr](https://github.com/Sonarr/
 
 These are the default commands:
 
+- `/app`: launch the interactive Telegram Mini App interface
 - `/help`: gives an overview of all the commands with their action
+
 - `/auth`: authenticate the chat to use this bot
 - `/start`: start adding a series or movie to Sonarr/Radarr
 - `/delete`: remove a series or movie from Sonarr/Radarr

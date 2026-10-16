@@ -3,7 +3,7 @@
 import logging
 import re
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
 import telegram
 from telegram.constants import ParseMode
 from telegram.ext import (CallbackQueryHandler, CommandHandler,
@@ -33,7 +33,18 @@ logger.debug(f"Addarr v{__version__} starting up...")
 SERIE_MOVIE_AUTHENTICATED, READ_CHOICE, GIVE_OPTION, GIVE_PATHS, TSL_NORMAL, GIVE_QUALITY_PROFILES, SELECT_SEASONS = range(7)
 SERIE_MOVIE_DELETE, READ_DELETE_CHOICE = 0,1
 
-application = Application.builder().token(config["telegram"]["token"]).build()
+async def on_post_init(app: Application):
+    if config.get("miniapp", {}).get("enable", False):
+        try:
+            import bridge
+            asyncio.create_task(bridge.start_bridge_listener())
+            logger.info("Mini App bridge task started in event loop.")
+        except Exception as e:
+            logger.error(f"Failed to start Mini App bridge task: {e}")
+
+bot_token = config.get("telegram", {}).get("token") or "0000000000:AAABBBCCCDDDEEEFFFGGGHHHIIIJJJKKK"
+application = Application.builder().token(bot_token).post_init(on_post_init).build()
+
 
 async def startCheck():
     bot = telegram.Bot(token=config["telegram"]["token"])
@@ -243,11 +254,51 @@ def main():
     application.add_handler(addMovieserie_handler)
     application.add_handler(deleteMovieserie_handler)
 
+    app_handler_command = CommandHandler("app", open_miniapp)
+    application.add_handler(app_handler_command)
+    app_handler_text = MessageHandler(
+        filters.Regex(re.compile(r"^app$", re.IGNORECASE)),
+        open_miniapp
+    )
+    application.add_handler(app_handler_text)
+
     help_handler_command = CommandHandler(config["entrypointHelp"], help)
     application.add_handler(help_handler_command)
 
     logger.info(i18n.t("addarr.Start chatting"))
     application.run_polling()
+
+
+async def open_miniapp(update: Update, context):
+    if config.get("enableAllowlist") and not checkAllowed(update, "regular"):
+        return ConversationHandler.END
+
+    if not checkId(update):
+        await authentication(update, context)
+        return
+
+    miniapp_url = config.get("miniapp", {}).get("url")
+    if not miniapp_url:
+        await context.bot.send_message(
+            chat_id=update.effective_message.chat_id,
+            text="Mini App URL is not configured. Set 'miniapp.url' in config.yaml."
+        )
+        return
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                text="🚀 Open Addarr Mini App",
+                web_app=WebAppInfo(url=miniapp_url)
+            )
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await context.bot.send_message(
+        chat_id=update.effective_message.chat_id,
+        text="Open the Addarr Mini App to visually browse, search, and manage your library:",
+        reply_markup=reply_markup
+    )
 
 async def stop(update, context):
     if config.get("enableAllowlist") and not checkAllowed(update,"regular"):

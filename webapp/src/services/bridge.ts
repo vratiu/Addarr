@@ -1,0 +1,162 @@
+import { ref, set, onValue, off, remove } from 'firebase/database';
+import { signInWithCustomToken } from 'firebase/auth';
+import { database, auth } from './firebase';
+import { SearchResult, LibraryItem, AppConfigOptions } from '../types';
+
+declare global {
+  interface Window {
+    Telegram?: {
+      WebApp?: any;
+    };
+  }
+}
+
+export class BridgeService {
+  private userId: string;
+  private username: string;
+  private initData: string;
+
+  constructor() {
+    const tg = window.Telegram?.WebApp;
+    const tgUser = tg?.initDataUnsafe?.user;
+    this.userId = String(tgUser?.id || 'demo_user_123');
+    this.username = tgUser?.username || '';
+    this.initData = tg?.initData || '';
+  }
+
+  public getUserId(): string {
+    return this.userId;
+  }
+
+  public getUsername(): string {
+    return this.username;
+  }
+
+  /**
+   * Optional exchange of Telegram initData for Firebase Auth token
+   */
+  public async authenticate(authEndpoint?: string): Promise<boolean> {
+    if (!authEndpoint || !this.initData) {
+      return true;
+    }
+    try {
+      const res = await fetch(authEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ initData: this.initData }),
+      });
+      const data = await res.json();
+      if (data.token) {
+        await signInWithCustomToken(auth, data.token);
+        return true;
+      }
+    } catch (e) {
+      console.warn('Firebase custom token authentication failed, falling back:', e);
+    }
+    return false;
+  }
+
+  /**
+   * Dispatches an action over Firebase RTDB and waits for Addarr's response.
+   */
+  public async sendCommand<T = any>(action: string, payload: Record<string, any> = {}): Promise<T> {
+    const reqId = `${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const requestRef = ref(database, `requests/${this.userId}/${reqId}`);
+    const responseRef = ref(database, `responses/${this.userId}/${reqId}`);
+
+    return new Promise<T>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        off(responseRef);
+        reject(new Error(`Bridge request timed out for action '${action}'`));
+      }, 15000);
+
+      // Listen for response
+      onValue(responseRef, (snapshot) => {
+        const val = snapshot.val();
+        if (val !== null && val !== undefined) {
+          clearTimeout(timeout);
+          off(responseRef);
+          // Clean up response node
+          remove(responseRef).catch(() => {});
+
+          if (val.success === false) {
+            reject(new Error(val.error || `Failed executing ${action}`));
+          } else {
+            resolve(val as T);
+          }
+        }
+      });
+
+      // Write request
+      set(requestRef, {
+        action,
+        payload,
+        username: this.username,
+        timestamp: Date.now(),
+      }).catch((err) => {
+        clearTimeout(timeout);
+        off(responseRef);
+        reject(err);
+      });
+    });
+  }
+
+  // --- Convenience Methods ---
+
+  public async searchMedia(type: 'movie' | 'series', term: string): Promise<SearchResult[]> {
+    const action = type === 'movie' ? 'search_movie' : 'search_series';
+    const res = await this.sendCommand<{ results: SearchResult[] }>(action, { term });
+    return res.results || [];
+  }
+
+  public async addMovie(tmdbId: number, path: string, qualityProfileId: number): Promise<boolean> {
+    const res = await this.sendCommand<{ success: boolean }>('add_movie', {
+      tmdbId,
+      path,
+      qualityProfileId,
+    });
+    return res.success;
+  }
+
+  public async addSeries(tvdbId: number, path: string, qualityProfileId: number, seasonsSelected?: any): Promise<boolean> {
+    const res = await this.sendCommand<{ success: boolean }>('add_series', {
+      tvdbId,
+      path,
+      qualityProfileId,
+      seasonsSelected,
+    });
+    return res.success;
+  }
+
+  public async getLibrary(type: 'movie' | 'series'): Promise<LibraryItem[]> {
+    const action = type === 'movie' ? 'get_library_movies' : 'get_library_series';
+    const res = await this.sendCommand<{ items: LibraryItem[] }>(action);
+    return res.items || [];
+  }
+
+  public async updateMovie(movieId: number, qualityProfileId?: number, monitored?: boolean): Promise<any> {
+    return this.sendCommand('update_movie', { movieId, qualityProfileId, monitored });
+  }
+
+  public async updateSeries(
+    seriesId: number,
+    qualityProfileId?: number,
+    monitored?: boolean,
+    seasons?: Array<{ seasonNumber: number; monitored: boolean }>
+  ): Promise<any> {
+    return this.sendCommand('update_series', { seriesId, qualityProfileId, monitored, seasons });
+  }
+
+  public async deleteMedia(type: 'movie' | 'series', id: number): Promise<boolean> {
+    const action = type === 'movie' ? 'delete_movie' : 'delete_series';
+    const payload = type === 'movie' ? { tmdbId: id } : { tvdbId: id };
+    const res = await this.sendCommand<{ success: boolean }>(action, payload);
+    return res.success;
+  }
+
+  public async getConfigOptions(): Promise<AppConfigOptions> {
+    return this.sendCommand<AppConfigOptions>('get_config_options');
+  }
+}
+
+export const bridge = new BridgeService();

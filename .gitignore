@@ -13,3 +13,9 @@ venv/
 chatid.txt
 admin.txt
 allowlist.txt
+
+.DS_Store
+.venv/
+webapp/node_modules/
+webapp/dist/
+serviceAccountKey.json

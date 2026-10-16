@@ -178,3 +178,59 @@ def getDbIdFromImdbId(tvdbId):
     parsed_json = json.loads(req.text)
     dbId = [f["id"] for f in parsed_json if f["tvdbId"] == tvdbId]
     return dbId[0]
+
+
+def get_library_summary():
+    req = requests.get(commons.generateApiQuery("sonarr", "series", {}))
+    if req.status_code == 200:
+        parsed_json = json.loads(req.text)
+        data = []
+        for show in parsed_json:
+            poster = None
+            for img in show.get("images", []):
+                if img.get("coverType") == "poster":
+                    poster = img.get("remoteUrl") or img.get("url")
+                    break
+            data.append(
+                {
+                    "id": show.get("id"),
+                    "tvdbId": show.get("tvdbId"),
+                    "title": show.get("title"),
+                    "year": show.get("year"),
+                    "poster": poster or show.get("remotePoster"),
+                    "qualityProfileId": show.get("qualityProfileId"),
+                    "monitored": show.get("monitored"),
+                    "status": show.get("status"),
+                    "seasonCount": show.get("statistics", {}).get("seasonCount", len(show.get("seasons", []))),
+                    "episodeCount": show.get("statistics", {}).get("episodeCount", 0),
+                    "episodeFileCount": show.get("statistics", {}).get("episodeFileCount", 0),
+                    "seasons": show.get("seasons", []),
+                }
+            )
+        return data
+    return False
+
+
+def update_series(series_id, quality_profile_id=None, monitored=None, seasons=None):
+    url = commons.generateApiQuery("sonarr", f"series/{series_id}", {})
+    req = requests.get(url)
+    if req.status_code != 200:
+        return False
+    series = json.loads(req.text)
+    if quality_profile_id is not None:
+        series["qualityProfileId"] = int(quality_profile_id)
+    if monitored is not None:
+        series["monitored"] = bool(monitored)
+    if seasons is not None:
+        season_map = {s["seasonNumber"]: s["monitored"] for s in seasons if "seasonNumber" in s and "monitored" in s}
+        for s in series.get("seasons", []):
+            if s.get("seasonNumber") in season_map:
+                s["monitored"] = season_map[s["seasonNumber"]]
+
+    put_url = commons.generateApiQuery("sonarr", f"series/{series_id}", {})
+    res = requests.put(put_url, json=series, headers={'Content-Type': 'application/json'})
+    if res.status_code in (200, 202):
+        return json.loads(res.text) if res.text else True
+    return False
+
+
