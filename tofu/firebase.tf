@@ -25,20 +25,20 @@ resource "google_firebase_database_instance" "rtdb" {
 
 # Apply Realtime Database Security Rules from firebase/database.rules.json
 resource "terraform_data" "rtdb_rules" {
-  input = filesha256("${path.module}/../firebase/database.rules.json")
+  triggers_replace = [
+    filesha256("${path.module}/../firebase/database.rules.json")
+  ]
 
   provisioner "local-exec" {
     command = <<-EOT
       echo "Applying Firebase Realtime Database rules..."
-      TOKEN=$(gcloud auth print-access-token 2>/dev/null || gcloud auth application-default print-access-token 2>/dev/null || true)
-      if [ -n "$TOKEN" ]; then
-        curl -s -f -X PUT \
+      TOKEN=$(gcloud auth print-access-token --scopes=https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/firebase.database,https://www.googleapis.com/auth/userinfo.email 2>/dev/null || gcloud auth print-access-token 2>/dev/null || true)
+      if [ -n "$TOKEN" ] && curl -s -f -X PUT \
           -H "Authorization: Bearer $TOKEN" \
           -H "Content-Type: application/json" \
           --data-binary "@${path.module}/../firebase/database.rules.json" \
-          "${google_firebase_database_instance.rtdb.database_url}/.settings/rules.json" > /dev/null \
-          && echo "Rules applied successfully via Firebase REST API." \
-          || echo "Notice: Direct REST API update returned non-zero. Ensure gcloud is authenticated."
+          "${google_firebase_database_instance.rtdb.database_url}/.settings/rules.json" > /dev/null; then
+        echo "Rules applied successfully via Firebase REST API."
       elif command -v firebase >/dev/null 2>&1; then
         firebase deploy --only database --project "${var.project_id}" || true
       else

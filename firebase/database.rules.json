@@ -1,24 +1,22 @@
 {
   "rules": {
     "requests": {
+      ".read": false,
       "$uid": {
-        ".read": "auth != null && auth.uid == $uid",
-        ".write": "auth != null && auth.uid == $uid",
         "$reqId": {
-          ".validate": "newData.hasChildren(['action', 'payload'])"
+          ".write": "!data.exists() && newData.exists()",
+          ".validate": "newData.hasChildren(['action', 'timestamp']) && newData.child('action').isString()"
         }
       }
     },
     "responses": {
+      ".read": false,
       "$uid": {
-        ".read": "auth != null && auth.uid == $uid",
-        ".write": false
-      }
-    },
-    "users": {
-      "$uid": {
-        ".read": "auth != null && auth.uid == $uid",
-        ".write": "auth != null && auth.uid == $uid"
+        ".read": false,
+        "$reqId": {
+          ".read": true,
+          ".write": "data.exists() && !newData.exists()"
+        }
       }
     }
   }
