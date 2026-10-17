@@ -132,6 +132,84 @@ class TestBridge(unittest.TestCase):
         self.assertEqual(tags, [])
 
 
+    @patch("bridge.radarr.get_discover_movies")
+    def test_dispatch_get_discover_movies(self, mock_discover):
+        mock_discover.return_value = [{"id": 101, "title": "Dune 3", "year": 2026, "poster": "poster.jpg"}]
+        res = bridge.dispatch_action("get_discover_movies", {"limit": 10})
+        self.assertTrue(res["success"])
+        self.assertEqual(len(res["results"]), 1)
+        self.assertEqual(res["results"][0]["title"], "Dune 3")
+        mock_discover.assert_called_with(limit=10)
+
+    def test_discover_movies_requires_admin_respects_config(self):
+        with patch.dict(bridge.config, {"radarr": {"adminRestrictions": True}}):
+            self.assertTrue(bridge._requires_admin("get_discover_movies"))
+        with patch.dict(bridge.config, {"radarr": {"adminRestrictions": False}}):
+            self.assertFalse(bridge._requires_admin("get_discover_movies"))
+
+    @patch("radarr.requests.get")
+    def test_radarr_get_discover_movies_filtering_and_caching(self, mock_get):
+        import radarr
+        radarr._discover_cache = {"timestamp": 0.0, "items": []}
+
+        # Mock API returning items including existing and excluded
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.text = json.dumps([
+            {"tmdbId": 1, "title": "Movie 1", "year": 2024, "isExisting": False, "isExcluded": False, "images": [{"coverType": "poster", "remoteUrl": "url1"}]},
+            {"tmdbId": 2, "title": "Movie 2", "year": 2024, "isExisting": True, "isExcluded": False},  # Should be filtered
+            {"tmdbId": 3, "title": "Movie 3", "year": 2024, "isExisting": False, "isExcluded": True},  # Should be filtered
+            {"tmdbId": 1, "title": "Movie 1 Dup", "year": 2024, "isExisting": False, "isExcluded": False},  # Duplicate
+            {"tmdbId": 4, "title": "Movie 4", "year": 2025, "isExisting": False, "isExcluded": False, "images": [{"coverType": "banner", "url": "b1"}], "remotePoster": "remote4"},
+        ])
+        mock_get.return_value = mock_resp
+
+        results = radarr.get_discover_movies(limit=24)
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0]["id"], 1)
+        self.assertEqual(results[0]["poster"], "url1")
+        self.assertEqual(results[1]["id"], 4)
+        self.assertEqual(results[1]["poster"], "remote4")
+        self.assertEqual(mock_get.call_count, 1)
+
+        # 2nd call should hit cache and NOT call requests.get again
+        cached_results = radarr.get_discover_movies(limit=1)
+        self.assertEqual(len(cached_results), 1)
+        self.assertEqual(cached_results[0]["id"], 1)
+        self.assertEqual(mock_get.call_count, 1)
+
+    @patch("radarr.requests.post")
+    @patch("radarr.requests.get")
+    def test_radarr_add_to_library_evicts_discover_cache(self, mock_get, mock_post):
+        import radarr
+        radarr._discover_cache = {
+            "timestamp": time.time(),
+            "items": [
+                {"id": 100, "title": "Movie 100"},
+                {"id": 200, "title": "Movie 200"},
+            ]
+        }
+
+        # Mock lookup
+        mock_lookup = MagicMock()
+        mock_lookup.status_code = 200
+        mock_lookup.text = json.dumps({"tmdbId": 100, "year": 2025, "title": "Movie 100", "titleSlug": "m100", "images": []})
+        mock_get.return_value = mock_lookup
+
+        # Mock add success (201)
+        mock_post_resp = MagicMock()
+        mock_post_resp.status_code = 201
+        mock_post.return_value = mock_post_resp
+
+        added = radarr.addToLibrary(100, "/movies", 1, [])
+        self.assertTrue(added)
+
+        # Check that 100 was evicted from cache
+        remaining_ids = [m["id"] for m in radarr._discover_cache["items"]]
+        self.assertNotIn(100, remaining_ids)
+        self.assertIn(200, remaining_ids)
+
+
 if __name__ == "__main__":
     unittest.main()
 

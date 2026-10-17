@@ -157,7 +157,7 @@ def _requires_admin(action: str) -> bool:
         return bool(config.get("enableAdmin", False) or config.get("radarr", {}).get("adminRestrictions", False))
     if action == "delete_series":
         return bool(config.get("enableAdmin", False) or config.get("sonarr", {}).get("adminRestrictions", False))
-    if action in ("update_movie", "get_library_movies", "get_calendar_movies"):
+    if action in ("update_movie", "get_library_movies", "get_calendar_movies", "get_discover_movies"):
         return bool(config.get("radarr", {}).get("adminRestrictions", False))
     if action in ("update_series", "get_library_series", "get_calendar_series"):
         return bool(config.get("sonarr", {}).get("adminRestrictions", False))
@@ -280,6 +280,11 @@ def dispatch_action(action: str, payload: Dict[str, Any], user_id: Optional[str]
             limit = int(payload.get("limit", 20))
             items = sonarr.get_calendar_series(days=days, limit=limit)
             return {"success": items is not False, "items": items or []}
+
+        elif action == "get_discover_movies":
+            limit = int(payload.get("limit", 24))
+            results = radarr.get_discover_movies(limit=limit)
+            return {"success": results is not False, "results": results or []}
 
         elif action == "update_movie":
             movie_id = int(payload["movieId"])
