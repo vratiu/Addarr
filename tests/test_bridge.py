@@ -91,6 +91,46 @@ class TestBridge(unittest.TestCase):
         mock_db.reference.assert_any_call("requests/123456/req_abc")
         mock_ref.delete.assert_called()
 
+    @patch("bridge.radarr.get_calendar_movies")
+    def test_dispatch_get_calendar_movies(self, mock_cal):
+        mock_cal.return_value = [{"title": "Avatar 3", "releaseDate": "2026-11-01"}]
+        res = bridge.dispatch_action("get_calendar_movies", {"days": 30, "limit": 10})
+        self.assertTrue(res["success"])
+        self.assertEqual(len(res["items"]), 1)
+        self.assertEqual(res["items"][0]["title"], "Avatar 3")
+        mock_cal.assert_called_with(days=30, limit=10)
+
+    @patch("bridge.sonarr.get_calendar_series")
+    def test_dispatch_get_calendar_series(self, mock_cal):
+        mock_cal.return_value = [{"title": "Severance", "episodeInfo": "S02E01"}]
+        res = bridge.dispatch_action("get_calendar_series", {})
+        self.assertTrue(res["success"])
+        self.assertEqual(len(res["items"]), 1)
+        self.assertEqual(res["items"][0]["title"], "Severance")
+        mock_cal.assert_called_with(days=60, limit=20)
+
+    def test_calendar_requires_admin_respects_config(self):
+        with patch.dict(bridge.config, {"radarr": {"adminRestrictions": True}, "sonarr": {"adminRestrictions": False}}):
+            self.assertTrue(bridge._requires_admin("get_calendar_movies"))
+            self.assertFalse(bridge._requires_admin("get_calendar_series"))
+
+        with patch.dict(bridge.config, {"radarr": {"adminRestrictions": False}, "sonarr": {"adminRestrictions": True}}):
+            self.assertFalse(bridge._requires_admin("get_calendar_movies"))
+            self.assertTrue(bridge._requires_admin("get_calendar_series"))
+
+    def test_scrub_apikey(self):
+        msg = "Error connecting to http://localhost:7878/api/v3?apikey=supersecret123&other=val"
+        scrubbed = bridge._scrub_apikey(msg)
+        self.assertNotIn("supersecret123", scrubbed)
+        self.assertIn("apikey=***", scrubbed)
+        self.assertIn("&other=val", scrubbed)
+
+    def test_resolve_tags_exception_handling(self):
+        mock_service = MagicMock()
+        mock_service.getTags.side_effect = Exception("Connection error: apikey=mysecretkey")
+        tags = bridge._resolve_tags(mock_service, {"defaultTags": ["test"]})
+        self.assertEqual(tags, [])
+
 
 if __name__ == "__main__":
     unittest.main()

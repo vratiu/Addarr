@@ -2,6 +2,7 @@
 
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -266,6 +267,105 @@ def update_series(series_id, quality_profile_id=None, monitored=None, seasons=No
     if res.status_code in (200, 202):
         return json.loads(res.text) if res.text else True
     return False
+
+
+def get_calendar_series(days=60, limit=20):
+    now = datetime.now(timezone.utc)
+    start_date = now.date()
+    end_date = start_date + timedelta(days=int(days))
+
+    parameters = {
+        "start": start_date.isoformat(),
+        "end": end_date.isoformat(),
+        "unmonitored": "false",
+        "includeSeries": "true",
+    }
+    url = commons.generateApiQuery("sonarr", "calendar", parameters)
+    req = requests.get(url, timeout=REQUEST_TIMEOUT)
+    if req.status_code == 200:
+        episodes = json.loads(req.text)
+        # Group episodes by (seriesId, seasonNumber, airDateStr)
+        groups = {}
+        for ep in episodes:
+            air_date_val = ep.get("airDate") or ep.get("airDateUtc")
+            if not air_date_val:
+                continue
+            rel_date_str = str(air_date_val)[:10]
+            try:
+                rel_date = datetime.strptime(rel_date_str, "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if not (start_date <= rel_date <= end_date):
+                continue
+
+            series = ep.get("series", {})
+            series_id = series.get("id") or ep.get("seriesId") or 0
+            season_num = ep.get("seasonNumber", 1)
+            group_key = (series_id, season_num, rel_date_str)
+
+            if group_key not in groups:
+                groups[group_key] = {
+                    "series": series,
+                    "seriesId": series_id,
+                    "seasonNumber": season_num,
+                    "releaseDate": rel_date_str,
+                    "episodes": [],
+                }
+            groups[group_key]["episodes"].append(ep)
+
+        result = []
+        for group in groups.values():
+            series = group["series"]
+            episodes_in_group = group["episodes"]
+            episodes_in_group.sort(key=lambda x: x.get("episodeNumber", 0))
+
+            count = len(episodes_in_group)
+            first_ep = episodes_in_group[0]
+            last_ep = episodes_in_group[-1]
+
+            poster = None
+            for img in series.get("images", []):
+                if img.get("coverType") == "poster":
+                    poster = img.get("remoteUrl") or img.get("url")
+                    break
+            poster = poster or series.get("remotePoster")
+
+            s_num = group["seasonNumber"]
+            first_ep_num = first_ep.get("episodeNumber", 0)
+            last_ep_num = last_ep.get("episodeNumber", 0)
+
+            if count == 1:
+                ep_info = f"S{s_num:02d}E{first_ep_num:02d}"
+                ep_title = first_ep.get("title") or f"Episode {first_ep_num}"
+            else:
+                ep_info = f"S{s_num:02d}E{first_ep_num:02d}-E{last_ep_num:02d} ({count} eps)"
+                ep_title = f"{count} Episodes"
+
+            result.append(
+                {
+                    "id": first_ep.get("id"),
+                    "seriesId": group["seriesId"],
+                    "tvdbId": series.get("tvdbId"),
+                    "title": series.get("title") or "Unknown Series",
+                    "year": series.get("year"),
+                    "poster": poster,
+                    "seasonNumber": s_num,
+                    "episodeNumber": first_ep_num,
+                    "endEpisodeNumber": last_ep_num if count > 1 else None,
+                    "episodeCount": count,
+                    "episodeInfo": ep_info,
+                    "episodeTitle": ep_title,
+                    "releaseDate": group["releaseDate"],
+                    "releaseDateIso": first_ep.get("airDateUtc") or group["releaseDate"],
+                    "hasFile": all(e.get("hasFile", False) for e in episodes_in_group),
+                    "monitored": any(e.get("monitored", True) for e in episodes_in_group),
+                }
+            )
+
+        result.sort(key=lambda x: (x["releaseDate"], x["title"]))
+        return result[:int(limit)]
+    return False
+
 
 
 

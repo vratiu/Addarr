@@ -33,6 +33,11 @@ _SAFE_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _APIKEY_SCRUB_RE = re.compile(r"(apikey=)[^&\s\"']+", re.IGNORECASE)
 
 
+def _scrub_apikey(msg: Any) -> str:
+    """Scrub sensitive apikey values from log/error messages."""
+    return _APIKEY_SCRUB_RE.sub(r"\1***", str(msg))
+
+
 def _is_safe_rtdb_key(key: str) -> bool:
     """Ensure RTDB path keys cannot traverse paths or exceed length limits."""
     return bool(key and isinstance(key, str) and _SAFE_KEY_RE.match(key))
@@ -152,9 +157,9 @@ def _requires_admin(action: str) -> bool:
         return bool(config.get("enableAdmin", False) or config.get("radarr", {}).get("adminRestrictions", False))
     if action == "delete_series":
         return bool(config.get("enableAdmin", False) or config.get("sonarr", {}).get("adminRestrictions", False))
-    if action in ("update_movie", "get_library_movies"):
+    if action in ("update_movie", "get_library_movies", "get_calendar_movies"):
         return bool(config.get("radarr", {}).get("adminRestrictions", False))
-    if action in ("update_series", "get_library_series"):
+    if action in ("update_series", "get_library_series", "get_calendar_series"):
         return bool(config.get("sonarr", {}).get("adminRestrictions", False))
     return False
 
@@ -206,7 +211,7 @@ def _resolve_tags(service_module, service_cfg: Dict[str, Any], user_id: Optional
             if label_list:
                 tags = [int(t["id"]) for t in existing_tags if t.get("label") in label_list]
     except Exception as e:
-        logger.warning(f"Could not resolve tags, defaulting to []: {_APIKEY_SCRUB_RE.sub(r'\1***', str(e))}")
+        logger.warning(f"Could not resolve tags, defaulting to []: {_scrub_apikey(e)}")
     return tags
 
 
@@ -264,6 +269,18 @@ def dispatch_action(action: str, payload: Dict[str, Any], user_id: Optional[str]
             items = sonarr.get_library_summary()
             return {"success": items is not False, "items": items or []}
 
+        elif action == "get_calendar_movies":
+            days = int(payload.get("days", 60))
+            limit = int(payload.get("limit", 20))
+            items = radarr.get_calendar_movies(days=days, limit=limit)
+            return {"success": items is not False, "items": items or []}
+
+        elif action == "get_calendar_series":
+            days = int(payload.get("days", 60))
+            limit = int(payload.get("limit", 20))
+            items = sonarr.get_calendar_series(days=days, limit=limit)
+            return {"success": items is not False, "items": items or []}
+
         elif action == "update_movie":
             movie_id = int(payload["movieId"])
             profile_id = int(payload["qualityProfileId"]) if payload.get("qualityProfileId") is not None else None
@@ -308,11 +325,11 @@ def dispatch_action(action: str, payload: Dict[str, Any], user_id: Optional[str]
             return {"success": False, "error": f"Unknown action: {action}"}
 
     except (ValueError, KeyError, TypeError) as e:
-        safe_msg = _APIKEY_SCRUB_RE.sub(r"\1***", str(e))
+        safe_msg = _scrub_apikey(e)
         logger.warning(f"Invalid parameters for action '{action}': {safe_msg}")
         return {"success": False, "error": f"Invalid request parameters: {safe_msg}"}
     except Exception as e:
-        safe_msg = _APIKEY_SCRUB_RE.sub(r"\1***", str(e))
+        safe_msg = _scrub_apikey(e)
         logger.error(f"Error handling action '{action}': {safe_msg}")
         return {"success": False, "error": "Internal service error while processing request"}
 

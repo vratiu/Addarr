@@ -48,11 +48,16 @@ resource "local_file" "webapp_firebase_json" {
 
 # Build and release webapp to Firebase Hosting
 resource "terraform_data" "webapp_build_and_deploy" {
-  input = {
-    env_content   = local_file.webapp_env_production.content
-    firebase_json = local_file.webapp_firebase_json.content
-    package_json  = filesha256("${path.module}/../webapp/package.json")
-  }
+  triggers_replace = [
+    local_file.webapp_env_production.content,
+    local_file.webapp_firebase_json.content,
+    filesha256("${path.module}/../webapp/package.json"),
+    filesha256("${path.module}/../webapp/index.html"),
+    sha256(join("", [
+      for f in fileset("${path.module}/../webapp/src", "**") :
+      filesha256("${path.module}/../webapp/src/${f}")
+    ]))
+  ]
 
   provisioner "local-exec" {
     working_dir = "${path.module}/../webapp"

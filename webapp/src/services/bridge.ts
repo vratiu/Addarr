@@ -1,7 +1,7 @@
 import { ref, set, onValue, off, remove } from 'firebase/database';
 import { signInWithCustomToken } from 'firebase/auth';
 import { database, auth } from './firebase';
-import { SearchResult, LibraryItem, AppConfigOptions } from '../types';
+import { SearchResult, LibraryItem, AppConfigOptions, CalendarItem, MediaType } from '../types';
 
 declare global {
   interface Window {
@@ -144,6 +144,12 @@ export class BridgeService {
   public async getLibrary(type: 'movie' | 'series'): Promise<LibraryItem[]> {
     const action = type === 'movie' ? 'get_library_movies' : 'get_library_series';
     const res = await this.sendCommand<{ items: LibraryItem[] }>(action);
+    return res.items || [];
+  }
+
+  public async getCalendar(type: MediaType, days: number = 60, limit: number = 20): Promise<CalendarItem[]> {
+    const action = type === 'movie' ? 'get_calendar_movies' : 'get_calendar_series';
+    const res = await this.sendCommand<{ items: CalendarItem[] }>(action, { days, limit });
     return res.items || [];
   }
 

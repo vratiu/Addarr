@@ -2,11 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { Navbar } from './components/Navbar';
 import { SearchTab } from './components/SearchTab';
 import { LibraryTab } from './components/LibraryTab';
-import { MediaType, AppConfigOptions } from './types';
+import { CalendarTab } from './components/CalendarTab';
+import { MediaType, TabType, AppConfigOptions } from './types';
 import { bridge } from './services/bridge';
 
 export const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'search' | 'library'>('search');
+  const [activeTab, setActiveTab] = useState<TabType>('search');
   const [mediaType, setMediaType] = useState<MediaType>('movie');
   const [configOptions, setConfigOptions] = useState<AppConfigOptions | null>(null);
   const [bridgeConnected, setBridgeConnected] = useState<boolean>(true);
@@ -49,10 +50,14 @@ export const App: React.FC = () => {
           </div>
         )}
 
-        {activeTab === 'search' ? (
+        {activeTab === 'search' && (
           <SearchTab mediaType={mediaType} configOptions={configOptions} />
-        ) : (
+        )}
+        {activeTab === 'library' && (
           <LibraryTab mediaType={mediaType} configOptions={configOptions} />
+        )}
+        {activeTab === 'calendar' && (
+          <CalendarTab mediaType={mediaType} />
         )}
       </main>
     </div>

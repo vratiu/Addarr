@@ -1,4 +1,26 @@
 export type MediaType = 'movie' | 'series';
+export type TabType = 'search' | 'library' | 'calendar';
+
+export interface CalendarItem {
+  id: number;
+  tmdbId?: number;
+  tvdbId?: number;
+  seriesId?: number;
+  title: string;
+  year?: number;
+  poster?: string;
+  releaseDate: string;
+  releaseDateIso?: string;
+  format?: string;
+  seasonNumber?: number;
+  episodeNumber?: number;
+  endEpisodeNumber?: number;
+  episodeCount?: number;
+  episodeInfo?: string;
+  episodeTitle?: string;
+  hasFile?: boolean;
+  monitored?: boolean;
+}
 
 export interface SearchResult {
   id: number; // tmdbId or tvdbId

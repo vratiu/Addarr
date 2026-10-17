@@ -32,3 +32,4 @@ crash.*.log
 webapp/.env.production
 webapp/.env.local
 .firebase/
+deploy.sh

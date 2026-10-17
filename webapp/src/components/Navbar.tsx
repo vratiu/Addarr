@@ -1,10 +1,10 @@
 import React from 'react';
-import { Film, Tv, Search, Library } from 'lucide-react';
-import { MediaType } from '../types';
+import { Film, Tv, Search, Library, Calendar } from 'lucide-react';
+import { MediaType, TabType } from '../types';
 
 interface NavbarProps {
-  activeTab: 'search' | 'library';
-  setActiveTab: (tab: 'search' | 'library') => void;
+  activeTab: TabType;
+  setActiveTab: (tab: TabType) => void;
   mediaType: MediaType;
   setMediaType: (type: MediaType) => void;
 }
@@ -79,6 +79,17 @@ export const Navbar: React.FC<NavbarProps> = ({
         >
           <Library className="w-4 h-4" />
           <span>My Library</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('calendar')}
+          className={`flex items-center space-x-1.5 pb-2 font-medium border-b-2 transition ${
+            activeTab === 'calendar'
+              ? 'border-tg-button text-tg-link'
+              : 'border-transparent text-tg-hint hover:text-tg-text'
+          }`}
+        >
+          <Calendar className="w-4 h-4" />
+          <span>Calendar</span>
         </button>
       </div>
     </header>

@@ -1,4 +1,5 @@
 .gitignore
+deploy.sh
 docker-compose.yml
 Dockerfile
 *.log

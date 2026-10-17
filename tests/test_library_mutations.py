@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import unittest
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 # Ensure src directory is in sys.path
@@ -9,21 +10,31 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 # Ensure fake config exists if config.yaml is not present
 import config as app_config
-if not hasattr(app_config, "config") or not app_config.config:
-    app_config.config = {
-        "radarr": {
-            "server": {"addr": "127.0.0.1", "port": 7878, "path": "/", "ssl": False},
-            "auth": {"apikey": "fake_radarr_key"},
-            "minimumAvailability": "announced",
-            "search": True
-        },
-        "sonarr": {
-            "server": {"addr": "127.0.0.1", "port": 8989, "path": "/", "ssl": False},
-            "auth": {"apikey": "fake_sonarr_key"},
-            "seasonFolder": True,
-            "search": True
-        }
-    }
+app_config.config.setdefault("radarr", {})
+app_config.config["radarr"].setdefault("server", {})
+if not app_config.config["radarr"]["server"].get("addr"):
+    app_config.config["radarr"]["server"]["addr"] = "127.0.0.1"
+    app_config.config["radarr"]["server"]["port"] = 7878
+    app_config.config["radarr"]["server"]["path"] = "/"
+    app_config.config["radarr"]["server"]["ssl"] = False
+app_config.config["radarr"].setdefault("auth", {})
+if not app_config.config["radarr"]["auth"].get("apikey"):
+    app_config.config["radarr"]["auth"]["apikey"] = "fake_radarr_key"
+app_config.config["radarr"].setdefault("minimumAvailability", "announced")
+app_config.config["radarr"].setdefault("search", True)
+
+app_config.config.setdefault("sonarr", {})
+app_config.config["sonarr"].setdefault("server", {})
+if not app_config.config["sonarr"]["server"].get("addr"):
+    app_config.config["sonarr"]["server"]["addr"] = "127.0.0.1"
+    app_config.config["sonarr"]["server"]["port"] = 8989
+    app_config.config["sonarr"]["server"]["path"] = "/"
+    app_config.config["sonarr"]["server"]["ssl"] = False
+app_config.config["sonarr"].setdefault("auth", {})
+if not app_config.config["sonarr"]["auth"].get("apikey"):
+    app_config.config["sonarr"]["auth"]["apikey"] = "fake_sonarr_key"
+app_config.config["sonarr"].setdefault("seasonFolder", True)
+app_config.config["sonarr"].setdefault("search", True)
 
 import radarr
 import sonarr
@@ -169,6 +180,185 @@ class TestLibraryMutations(unittest.TestCase):
         self.assertTrue(put_payload["seasons"][0]["monitored"])
         self.assertFalse(put_payload["seasons"][1]["monitored"])
 
+    @patch("radarr.requests.get")
+    def test_radarr_get_calendar_movies(self, mock_get):
+        today = datetime.now(timezone.utc).date()
+        in_3_days = (today + timedelta(days=3)).isoformat()
+        in_10_days = (today + timedelta(days=10)).isoformat()
+        in_70_days = (today + timedelta(days=70)).isoformat()
+
+        fake_movies = [
+            {
+                "id": 1,
+                "tmdbId": 101,
+                "title": "Movie In 10 Days",
+                "year": 2026,
+                "digitalRelease": in_10_days,
+                "inCinemas": (today - timedelta(days=30)).isoformat(),
+                "images": [{"coverType": "poster", "remoteUrl": "https://img/10.jpg"}],
+                "monitored": True,
+                "hasFile": False,
+            },
+            {
+                "id": 2,
+                "tmdbId": 102,
+                "title": "Movie In 3 Days",
+                "year": 2026,
+                "digitalRelease": in_3_days,
+                "inCinemas": (today - timedelta(days=20)).isoformat(),
+                "images": [{"coverType": "poster", "remoteUrl": "https://img/3.jpg"}],
+                "monitored": True,
+                "hasFile": True,
+            },
+            {
+                "id": 3,
+                "tmdbId": 103,
+                "title": "Cinema Only Movie",
+                "year": 2026,
+                "digitalRelease": None,
+                "inCinemas": in_3_days,
+                "images": [],
+                "monitored": True,
+                "hasFile": False,
+            },
+            {
+                "id": 4,
+                "tmdbId": 104,
+                "title": "Too Far Movie",
+                "year": 2026,
+                "digitalRelease": in_70_days,
+                "images": [],
+                "monitored": True,
+                "hasFile": False,
+            },
+        ]
+        fake_res = MagicMock()
+        fake_res.status_code = 200
+        fake_res.text = json.dumps(fake_movies)
+        mock_get.return_value = fake_res
+
+        results = radarr.get_calendar_movies(days=60, limit=20)
+        self.assertIsNotNone(results)
+        self.assertEqual(len(results), 2)
+        # Verify sorted ascending by digital release
+        self.assertEqual(results[0]["title"], "Movie In 3 Days")
+        self.assertEqual(results[0]["releaseDate"], in_3_days)
+        self.assertEqual(results[0]["format"], "digital")
+        self.assertTrue(results[0]["hasFile"])
+        self.assertEqual(results[1]["title"], "Movie In 10 Days")
+        self.assertEqual(results[1]["releaseDate"], in_10_days)
+
+    @patch("sonarr.requests.get")
+    def test_sonarr_get_calendar_series(self, mock_get):
+        today = datetime.now(timezone.utc).date()
+        in_2_days = (today + timedelta(days=2)).isoformat()
+        in_5_days = (today + timedelta(days=5)).isoformat()
+        in_80_days = (today + timedelta(days=80)).isoformat()
+
+        fake_episodes = [
+            # Two episodes of Severance on the same day -> should be grouped
+            {
+                "id": 501,
+                "seriesId": 10,
+                "seasonNumber": 2,
+                "episodeNumber": 1,
+                "title": "Hello",
+                "airDate": in_2_days,
+                "airDateUtc": f"{in_2_days}T00:00:00Z",
+                "hasFile": False,
+                "monitored": True,
+                "series": {
+                    "id": 10,
+                    "tvdbId": 999,
+                    "title": "Severance",
+                    "year": 2022,
+                    "images": [{"coverType": "poster", "remoteUrl": "https://img/sev.jpg"}],
+                },
+            },
+            {
+                "id": 502,
+                "seriesId": 10,
+                "seasonNumber": 2,
+                "episodeNumber": 2,
+                "title": "Goodbye",
+                "airDate": in_2_days,
+                "airDateUtc": f"{in_2_days}T01:00:00Z",
+                "hasFile": False,
+                "monitored": True,
+                "series": {
+                    "id": 10,
+                    "tvdbId": 999,
+                    "title": "Severance",
+                    "year": 2022,
+                    "images": [{"coverType": "poster", "remoteUrl": "https://img/sev.jpg"}],
+                },
+            },
+            # Single episode of another show on in_5_days
+            {
+                "id": 601,
+                "seriesId": 20,
+                "seasonNumber": 1,
+                "episodeNumber": 4,
+                "title": "Solo Ep",
+                "airDate": in_5_days,
+                "airDateUtc": f"{in_5_days}T00:00:00Z",
+                "hasFile": True,
+                "monitored": True,
+                "series": {
+                    "id": 20,
+                    "tvdbId": 888,
+                    "title": "Slow Horses",
+                    "year": 2022,
+                    "images": [],
+                },
+            },
+            # Far future episode -> should be excluded
+            {
+                "id": 701,
+                "seriesId": 30,
+                "seasonNumber": 1,
+                "episodeNumber": 1,
+                "title": "Far Away",
+                "airDate": in_80_days,
+                "airDateUtc": f"{in_80_days}T00:00:00Z",
+                "hasFile": False,
+                "monitored": True,
+                "series": {"id": 30, "title": "Future Show"},
+            },
+        ]
+        fake_res = MagicMock()
+        fake_res.status_code = 200
+        fake_res.text = json.dumps(fake_episodes)
+        mock_get.return_value = fake_res
+
+        results = sonarr.get_calendar_series(days=60, limit=20)
+        self.assertIsNotNone(results)
+        self.assertEqual(len(results), 2)
+
+        # First entry: Severance grouped
+        first = results[0]
+        self.assertEqual(first["title"], "Severance")
+        self.assertEqual(first["seasonNumber"], 2)
+        self.assertEqual(first["episodeNumber"], 1)
+        self.assertEqual(first["endEpisodeNumber"], 2)
+        self.assertEqual(first["episodeCount"], 2)
+        self.assertIn("S02E01-E02", first["episodeInfo"])
+        self.assertEqual(first["releaseDate"], in_2_days)
+        self.assertEqual(first["poster"], "https://img/sev.jpg")
+
+        # Second entry: Slow Horses single episode
+        second = results[1]
+        self.assertEqual(second["title"], "Slow Horses")
+        self.assertEqual(second["seasonNumber"], 1)
+        self.assertEqual(second["episodeNumber"], 4)
+        self.assertIsNone(second["endEpisodeNumber"])
+        self.assertEqual(second["episodeCount"], 1)
+        self.assertEqual(second["episodeInfo"], "S01E04")
+        self.assertEqual(second["episodeTitle"], "Solo Ep")
+        self.assertEqual(second["releaseDate"], in_5_days)
+        self.assertTrue(second["hasFile"])
+
 
 if __name__ == "__main__":
     unittest.main()
+

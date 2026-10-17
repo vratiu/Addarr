@@ -2,6 +2,7 @@
 
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -227,4 +228,56 @@ def update_movie(movie_id, quality_profile_id=None, monitored=None):
     )
     if res.status_code in (200, 202):
         return json.loads(res.text) if res.text else True
+    return False
+
+
+def get_calendar_movies(days=60, limit=20):
+    now = datetime.now(timezone.utc)
+    start_date = now.date()
+    end_date = start_date + timedelta(days=int(days))
+
+    parameters = {
+        "start": start_date.isoformat(),
+        "end": end_date.isoformat(),
+        "unmonitored": "false",
+    }
+    url = commons.generateApiQuery("radarr", "calendar", parameters)
+    req = requests.get(url, timeout=REQUEST_TIMEOUT)
+    if req.status_code == 200:
+        movies = json.loads(req.text)
+        data = []
+        for movie in movies:
+            digital_release = movie.get("digitalRelease")
+            if not digital_release:
+                continue
+            try:
+                rel_date_str = str(digital_release)[:10]
+                rel_date = datetime.strptime(rel_date_str, "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if not (start_date <= rel_date <= end_date):
+                continue
+
+            poster = None
+            for img in movie.get("images", []):
+                if img.get("coverType") == "poster":
+                    poster = img.get("remoteUrl") or img.get("url")
+                    break
+
+            data.append(
+                {
+                    "id": movie.get("id"),
+                    "tmdbId": movie.get("tmdbId"),
+                    "title": movie.get("title"),
+                    "year": movie.get("year"),
+                    "poster": poster or movie.get("remotePoster"),
+                    "releaseDate": rel_date_str,
+                    "releaseDateIso": digital_release,
+                    "format": "digital",
+                    "monitored": movie.get("monitored", True),
+                    "hasFile": movie.get("hasFile", False),
+                }
+            )
+        data.sort(key=lambda m: (m["releaseDate"], m["title"]))
+        return data[:int(limit)]
     return False
