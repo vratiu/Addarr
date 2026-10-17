@@ -4,7 +4,17 @@ Dockerfile
 *.log
 config.yaml
 admin.txt
+allowlist.txt
 chatid.txt
+serviceAccountKey.json
+*.tfstate
+*.tfstate.*
+*.tfvars
+tofu/
+webapp/
+cloud/
+openspec/
+.agents/
 **/.flake8
 **/__pycache__
 **/logs
@@ -13,6 +23,7 @@ chatid.txt
 **/.classpath
 **/.dockerignore
 **/.env
+**/.env.*
 **/.git
 **/.gitignore
 **/.project

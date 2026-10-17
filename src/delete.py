@@ -73,7 +73,7 @@ async def delete(update : Update, context):
 
 async def choiceDeleteSerieMovie(update, context):
     service = getService(context)
-    if service.config.get("adminRestrictions") and not checkAllowed(update, context, "admin"):
+    if service.config.get("adminRestrictions") and not checkAllowed(update, "admin"):
         await context.bot.send_message(
             chat_id=update.effective_message.chat_id,
             text=i18n.t("addarr.NotAdmin"),
@@ -81,11 +81,11 @@ async def choiceDeleteSerieMovie(update, context):
         return ConversationHandler.END
     if not checkId(update):
         if (
-            authentication(update, context) == "added"
+            await authentication(update, context) == "added"
         ):  # To also stop the beginning command
             return ConversationHandler.END
     elif update.message.text.lower() == "/stop".lower() or update.message.text.lower() == "stop".lower():
-        return stop(update, context)
+        return await stop(update, context)
     else:
         if update.message is not None:
             reply = update.message.text
@@ -151,6 +151,13 @@ async def confirmDelete(update, context):
     context.user_data["position"] = 0
 
     service = getService(context)
+    if service.config.get("adminRestrictions") and not checkAllowed(update, "admin"):
+        await context.bot.send_message(
+            chat_id=update.effective_message.chat_id,
+            text=i18n.t("addarr.NotAdmin"),
+        )
+        clearUserData(context)
+        return ConversationHandler.END
 
     position = context.user_data["position"]
 

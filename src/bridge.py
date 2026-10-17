@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 
 import os
+import re
+import hmac
+import hashlib
 import json
+import time
 import logging
 import asyncio
-from typing import Dict, Any, Optional
+from urllib.parse import parse_qsl
+from typing import Dict, Any, Optional, Tuple
 
 import logger
 from config import config
@@ -19,48 +24,166 @@ logger = logger.getLogger("addarr.bridge", logLevel, config.get("logToConsole", 
 _app = None
 _listener = None
 
+# Per-user sliding window rate limiter: user_id -> list of request timestamps
+_rate_limit_buckets: Dict[str, list] = {}
+RATE_LIMIT_WINDOW_SECONDS = 60
+RATE_LIMIT_MAX_REQUESTS = 30
+MAX_REQUEST_AGE_MS = 5 * 60 * 1000  # 5 minutes
+_SAFE_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_APIKEY_SCRUB_RE = re.compile(r"(apikey=)[^&\s\"']+", re.IGNORECASE)
+
+
+def _is_safe_rtdb_key(key: str) -> bool:
+    """Ensure RTDB path keys cannot traverse paths or exceed length limits."""
+    return bool(key and isinstance(key, str) and _SAFE_KEY_RE.match(key))
+
+
+def _check_rate_limit(user_id: str) -> bool:
+    """Return True if user_id is within rate limits, False if throttled."""
+    now = time.time()
+    bucket = _rate_limit_buckets.get(user_id, [])
+    bucket = [ts for ts in bucket if now - ts < RATE_LIMIT_WINDOW_SECONDS]
+    if len(bucket) >= RATE_LIMIT_MAX_REQUESTS:
+        _rate_limit_buckets[user_id] = bucket
+        return False
+    bucket.append(now)
+    _rate_limit_buckets[user_id] = bucket
+    return True
+
+
+def verify_telegram_init_data(
+    init_data: str,
+    bot_token: str,
+    max_age_seconds: int = 86400
+) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    """
+    Cryptographically verify Telegram WebApp initData HMAC-SHA256 signature.
+    Returns (is_valid, user_dict).
+    """
+    if not init_data or not bot_token or not isinstance(init_data, str) or len(init_data) > 4096:
+        return False, None
+
+    try:
+        parsed = dict(parse_qsl(init_data, keep_blank_values=True))
+        if "hash" not in parsed:
+            return False, None
+
+        received_hash = parsed.pop("hash")
+
+        auth_date = int(parsed.get("auth_date", 0))
+        now = time.time()
+        # Reject missing/expired timestamps or timestamps in the future (>60s clock skew)
+        if auth_date <= 0 or (now - auth_date > max_age_seconds) or (auth_date > now + 60):
+            return False, None
+
+        data_check_arr = [f"{k}={v}" for k, v in sorted(parsed.items())]
+        data_check_string = "\n".join(data_check_arr)
+
+        secret_key = hmac.new(b"WebAppData", str(bot_token).encode("utf-8"), hashlib.sha256).digest()
+        calculated_hash = hmac.new(secret_key, data_check_string.encode("utf-8"), hashlib.sha256).hexdigest()
+
+        if hmac.compare_digest(calculated_hash, received_hash):
+            user_data = json.loads(parsed.get("user", "{}"))
+            if isinstance(user_data, dict) and "id" in user_data:
+                return True, user_data
+
+        return False, None
+    except Exception:
+        return False, None
+
 
 def is_user_authorized(telegram_uid: str, username: Optional[str] = None, check_admin: bool = False) -> bool:
-    """Validate user authorization against allowlist, admin, or chatid files."""
-    telegram_uid_str = str(telegram_uid).strip()
-    username_str = str(username).strip() if username else ""
+    """
+    Validate user authorization against allowlist, admin, and chatid files.
+    Fails closed (returns False) if no authorization source has granted access.
+    """
+    telegram_uid_str = str(telegram_uid).strip() if telegram_uid is not None else ""
+    if not telegram_uid_str or telegram_uid_str == "None":
+        return False
 
-    # Check allowlist if enabled
+    username_str = str(username).strip() if username and str(username).strip() != "None" else ""
+    explicitly_authorized = False
+
+    # 1. Check allowlist if enabled
     if config.get("enableAllowlist", False):
         if not os.path.exists(ALLOWLIST_PATH):
             return False
         with open(ALLOWLIST_PATH, "r", encoding="utf8") as f:
             allowed = False
             for line in f:
-                cid = line.strip().split(" - ")[0]
+                cid = line.strip().split(" - ")[0].strip()
                 if cid and (cid == telegram_uid_str or (username_str and cid == username_str)):
                     allowed = True
                     break
             if not allowed:
                 return False
+            explicitly_authorized = True
 
-    # Check admin if required or enabled
-    if check_admin or config.get("enableAdmin", False):
+    # 2. Check admin if required for this action
+    if check_admin:
         if not os.path.exists(ADMIN_PATH):
             return False
         with open(ADMIN_PATH, "r", encoding="utf8") as f:
             is_admin = False
             for line in f:
-                cid = line.strip().split(" - ")[0]
+                cid = line.strip().split(" - ")[0].strip()
                 if cid and (cid == telegram_uid_str or (username_str and cid == username_str)):
                     is_admin = True
                     break
             if not is_admin:
                 return False
+            explicitly_authorized = True
 
-    # Check authenticated chats in chatid.txt if file exists and has content
+    # 3. Check authenticated chats in chatid.txt
     if os.path.exists(CHATID_PATH):
         with open(CHATID_PATH, "r", encoding="utf8") as f:
-            lines = [l.strip().split(" - ")[0] for l in f if l.strip()]
-            if lines and telegram_uid_str not in lines:
-                return False
+            lines = [l.strip().split(" - ")[0].strip() for l in f if l.strip()]
+            if lines:
+                if telegram_uid_str not in lines:
+                    return False
+                explicitly_authorized = True
 
-    return True
+    return explicitly_authorized
+
+
+def _requires_admin(action: str) -> bool:
+    """Return True if the requested action requires admin privileges under current config."""
+    if action == "delete_movie":
+        return bool(config.get("enableAdmin", False) or config.get("radarr", {}).get("adminRestrictions", False))
+    if action == "delete_series":
+        return bool(config.get("enableAdmin", False) or config.get("sonarr", {}).get("adminRestrictions", False))
+    if action in ("update_movie", "get_library_movies"):
+        return bool(config.get("radarr", {}).get("adminRestrictions", False))
+    if action in ("update_series", "get_library_series"):
+        return bool(config.get("sonarr", {}).get("adminRestrictions", False))
+    return False
+
+
+def _get_filtered_root_folders(service_module, service_cfg: Dict[str, Any]) -> list:
+    """Return root folders excluding any configured in excludedRootFolders."""
+    folders = service_module.getRootFolders() or []
+    excluded = [f for f in (service_cfg.get("excludedRootFolders") or []) if f]
+    return [f for f in folders if isinstance(f, dict) and f.get("path") not in excluded]
+
+
+def _get_filtered_quality_profiles(service_module, service_cfg: Dict[str, Any]) -> list:
+    """Return quality profiles excluding any configured in excludedQualityProfiles."""
+    profiles = service_module.getQualityProfiles() or []
+    excluded = [p for p in (service_cfg.get("excludedQualityProfiles") or []) if p]
+    return [p for p in profiles if isinstance(p, dict) and p.get("name") not in excluded]
+
+
+def _validate_root_folder_path(path: Any, service_cfg: Dict[str, Any]) -> str:
+    """Validate that a root folder path is a safe string and not excluded."""
+    if not path or not isinstance(path, str):
+        raise ValueError("Invalid root folder path")
+    norm_path = path.strip()
+    if not norm_path or ".." in norm_path.split("/") or ".." in norm_path.split("\\"):
+        raise ValueError("Invalid root folder path")
+    excluded = [f for f in (service_cfg.get("excludedRootFolders") or []) if f]
+    if norm_path in excluded or norm_path.rstrip("/") in [str(x).rstrip("/") for x in excluded]:
+        raise ValueError("Selected root folder is restricted")
+    return norm_path
 
 
 def _resolve_tags(service_module, service_cfg: Dict[str, Any], user_id: Optional[str] = None, raw_tags=None) -> list:
@@ -83,40 +206,49 @@ def _resolve_tags(service_module, service_cfg: Dict[str, Any], user_id: Optional
             if label_list:
                 tags = [int(t["id"]) for t in existing_tags if t.get("label") in label_list]
     except Exception as e:
-        logger.warning(f"Could not resolve tags, defaulting to []: {e}")
+        logger.warning(f"Could not resolve tags, defaulting to []: {_APIKEY_SCRUB_RE.sub(r'\1***', str(e))}")
     return tags
 
 
 def dispatch_action(action: str, payload: Dict[str, Any], user_id: Optional[str] = None) -> Dict[str, Any]:
     """Execute action against local Sonarr/Radarr APIs and return data."""
+    if not isinstance(payload, dict):
+        payload = {}
+
     try:
         if action == "search_movie":
-            term = payload.get("term", "")
+            term = str(payload.get("term", "")).strip()
+            if not term or len(term) > 256:
+                return {"success": True, "results": []}
             raw = radarr.search(term)
             if raw:
                 return {"success": True, "results": radarr.giveTitles(raw)}
             return {"success": True, "results": []}
 
         elif action == "search_series":
-            term = payload.get("term", "")
+            term = str(payload.get("term", "")).strip()
+            if not term or len(term) > 256:
+                return {"success": True, "results": []}
             raw = sonarr.search(term)
             if raw:
                 return {"success": True, "results": sonarr.giveTitles(raw)}
             return {"success": True, "results": []}
 
         elif action == "add_movie":
-            tmdb_id = payload.get("tmdbId")
-            path = payload.get("path")
-            quality_profile_id = payload.get("qualityProfileId")
-            tags = _resolve_tags(radarr, config.get("radarr", {}), user_id=user_id, raw_tags=payload.get("tags"))
+            radarr_cfg = config.get("radarr", {})
+            tmdb_id = int(payload["tmdbId"])
+            path = _validate_root_folder_path(payload.get("path"), radarr_cfg)
+            quality_profile_id = int(payload["qualityProfileId"])
+            tags = _resolve_tags(radarr, radarr_cfg, user_id=user_id, raw_tags=payload.get("tags"))
             success = radarr.addToLibrary(tmdb_id, path, quality_profile_id, tags)
             return {"success": bool(success)}
 
         elif action == "add_series":
-            tvdb_id = payload.get("tvdbId")
-            path = payload.get("path")
-            quality_profile_id = payload.get("qualityProfileId")
-            tags = _resolve_tags(sonarr, config.get("sonarr", {}), user_id=user_id, raw_tags=payload.get("tags"))
+            sonarr_cfg = config.get("sonarr", {})
+            tvdb_id = int(payload["tvdbId"])
+            path = _validate_root_folder_path(payload.get("path"), sonarr_cfg)
+            quality_profile_id = int(payload["qualityProfileId"])
+            tags = _resolve_tags(sonarr, sonarr_cfg, user_id=user_id, raw_tags=payload.get("tags"))
             seasons_selected = payload.get("seasonsSelected")
             if seasons_selected is None:
                 # default to all seasons monitored
@@ -133,49 +265,56 @@ def dispatch_action(action: str, payload: Dict[str, Any], user_id: Optional[str]
             return {"success": items is not False, "items": items or []}
 
         elif action == "update_movie":
-            movie_id = payload.get("movieId")
-            profile_id = payload.get("qualityProfileId")
+            movie_id = int(payload["movieId"])
+            profile_id = int(payload["qualityProfileId"]) if payload.get("qualityProfileId") is not None else None
             monitored = payload.get("monitored")
             result = radarr.update_movie(movie_id, quality_profile_id=profile_id, monitored=monitored)
             return {"success": bool(result), "data": result}
 
         elif action == "update_series":
-            series_id = payload.get("seriesId")
-            profile_id = payload.get("qualityProfileId")
+            series_id = int(payload["seriesId"])
+            profile_id = int(payload["qualityProfileId"]) if payload.get("qualityProfileId") is not None else None
             monitored = payload.get("monitored")
             seasons = payload.get("seasons")
             result = sonarr.update_series(series_id, quality_profile_id=profile_id, monitored=monitored, seasons=seasons)
             return {"success": bool(result), "data": result}
 
         elif action == "delete_movie":
-            tmdb_id = payload.get("tmdbId")
+            tmdb_id = int(payload["tmdbId"])
             result = radarr.removeFromLibrary(tmdb_id)
             return {"success": bool(result)}
 
         elif action == "delete_series":
-            tvdb_id = payload.get("tvdbId")
+            tvdb_id = int(payload["tvdbId"])
             result = sonarr.removeFromLibrary(tvdb_id)
             return {"success": bool(result)}
 
         elif action == "get_config_options":
+            radarr_cfg = config.get("radarr", {})
+            sonarr_cfg = config.get("sonarr", {})
             return {
                 "success": True,
                 "radarr": {
-                    "qualityProfiles": radarr.getQualityProfiles(),
-                    "rootFolders": radarr.getRootFolders(),
+                    "qualityProfiles": _get_filtered_quality_profiles(radarr, radarr_cfg),
+                    "rootFolders": _get_filtered_root_folders(radarr, radarr_cfg),
                 },
                 "sonarr": {
-                    "qualityProfiles": sonarr.getQualityProfiles(),
-                    "rootFolders": sonarr.getRootFolders(),
+                    "qualityProfiles": _get_filtered_quality_profiles(sonarr, sonarr_cfg),
+                    "rootFolders": _get_filtered_root_folders(sonarr, sonarr_cfg),
                 }
             }
 
         else:
             return {"success": False, "error": f"Unknown action: {action}"}
 
+    except (ValueError, KeyError, TypeError) as e:
+        safe_msg = _APIKEY_SCRUB_RE.sub(r"\1***", str(e))
+        logger.warning(f"Invalid parameters for action '{action}': {safe_msg}")
+        return {"success": False, "error": f"Invalid request parameters: {safe_msg}"}
     except Exception as e:
-        logger.error(f"Error handling action '{action}': {e}", exc_info=True)
-        return {"success": False, "error": str(e)}
+        safe_msg = _APIKEY_SCRUB_RE.sub(r"\1***", str(e))
+        logger.error(f"Error handling action '{action}': {safe_msg}")
+        return {"success": False, "error": "Internal service error while processing request"}
 
 
 def process_request(db_module, user_id: str, req_id: str, request_data: Dict[str, Any]):
@@ -183,25 +322,75 @@ def process_request(db_module, user_id: str, req_id: str, request_data: Dict[str
     if not isinstance(request_data, dict):
         return
 
-    action = request_data.get("action")
+    if not _is_safe_rtdb_key(str(user_id)) or not _is_safe_rtdb_key(str(req_id)):
+        logger.warning("Ignoring bridge request with malformed user_id or req_id")
+        return
+
+    req_ref = db_module.reference(f"requests/{user_id}/{req_id}")
+
+    # Discard stale requests older than MAX_REQUEST_AGE_MS
+    req_ts = request_data.get("timestamp")
+    if isinstance(req_ts, (int, float)) and req_ts > 0:
+        now_ms = time.time() * 1000
+        if now_ms - req_ts > MAX_REQUEST_AGE_MS:
+            logger.warning(f"Discarding stale bridge request req_id={req_id} user_id={user_id}")
+            try:
+                req_ref.delete()
+            except Exception:
+                pass
+            return
+
+    # Enforce per-user rate limit
+    if not _check_rate_limit(str(user_id)):
+        logger.warning(f"Rate limit exceeded for bridge user_id={user_id}")
+        try:
+            req_ref.delete()
+        except Exception:
+            pass
+        return
+
+    action = str(request_data.get("action", ""))
     payload = request_data.get("payload", {})
-    username = request_data.get("username")
+    init_data = request_data.get("initData", "")
+    bot_token = config.get("telegram", {}).get("token")
+    allow_unverified_dev = bool(config.get("miniapp", {}).get("allowUnverifiedLocalDev", False))
 
     logger.info(f"Processing bridge request req_id={req_id} action={action} user_id={user_id}")
 
-    # Verify authorization
-    if not is_user_authorized(user_id, username=username):
-        logger.warning(f"Unauthorized bridge request from user_id={user_id}")
+    verified_uid = str(user_id)
+    verified_username = None
+
+    # Cryptographically verify Telegram WebApp initData unless explicitly in local unverified dev mode
+    if not allow_unverified_dev:
+        is_valid_sig, tg_user = verify_telegram_init_data(init_data, str(bot_token or ""))
+        if not is_valid_sig or not tg_user or str(tg_user.get("id")) != str(user_id).strip():
+            logger.warning(
+                f"Rejected bridge request req_id={req_id} from user_id={user_id}: invalid or missing Telegram initData signature"
+            )
+            try:
+                resp_ref = db_module.reference(f"responses/{user_id}/{req_id}")
+                resp_ref.set({"success": False, "error": "Unauthorized: invalid Telegram session"})
+                req_ref.delete()
+            except Exception as e:
+                logger.error(f"Failed to clean up rejected request req_id={req_id}: {e}")
+            return
+        verified_uid = str(tg_user["id"])
+        verified_username = tg_user.get("username")
+    else:
+        verified_username = request_data.get("username")
+
+    # Verify user authorization (and admin privileges if action requires it)
+    need_admin = _requires_admin(action)
+    if not is_user_authorized(verified_uid, username=verified_username, check_admin=need_admin):
+        logger.warning(f"Unauthorized bridge request from user_id={verified_uid} action={action} (admin_required={need_admin})")
         response_payload = {"success": False, "error": "Unauthorized"}
     else:
-        response_payload = dispatch_action(action, payload, user_id=user_id)
+        response_payload = dispatch_action(action, payload, user_id=verified_uid)
 
-    # Post response to /responses/{user_id}/{req_id}
+    # Post response to /responses/{user_id}/{req_id} and delete request
     try:
         resp_ref = db_module.reference(f"responses/{user_id}/{req_id}")
         resp_ref.set(response_payload)
-        # Delete original request to keep queue clean
-        req_ref = db_module.reference(f"requests/{user_id}/{req_id}")
         req_ref.delete()
     except Exception as e:
         logger.error(f"Failed to write bridge response for req_id={req_id}: {e}")
@@ -242,7 +431,7 @@ def init_firebase_app():
 
 async def start_bridge_listener():
     """Asynchronous entry point that listens for requests on Firebase RTDB."""
-    global _app
+    global _app, _listener
     miniapp_cfg = config.get("miniapp", {})
     if not miniapp_cfg.get("enable", False):
         return
@@ -292,3 +481,4 @@ async def start_bridge_listener():
 
     while True:
         await asyncio.sleep(60)
+

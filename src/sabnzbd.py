@@ -3,26 +3,36 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ConversationHandler
 
 from commons import authentication, checkAllowed, checkId, generateApiQuery
-from config import config
+from config import config as root_config
 from translations import i18n
 import logging
 import logger
 
 # Set up logging
-logLevel = logging.DEBUG if config.get("debugLogging", False) else logging.INFO
-logger = logger.getLogger("addarr.radarr", logLevel, config.get("logToConsole", False))
+logLevel = logging.DEBUG if root_config.get("debugLogging", False) else logging.INFO
+logger = logger.getLogger("addarr.radarr", logLevel, root_config.get("logToConsole", False))
 
-config = config["sabnzbd"]
+config = root_config["sabnzbd"]
 
 SABNZBD_SPEED_LIMIT_25, SABNZBD_SPEED_LIMIT_50, SABNZBD_SPEED_LIMIT_100 = range(3)
+REQUEST_TIMEOUT = 15
+
+_ALLOWED_SPEED_VALUES = {
+    str(SABNZBD_SPEED_LIMIT_25): "25",
+    str(SABNZBD_SPEED_LIMIT_50): "50",
+    str(SABNZBD_SPEED_LIMIT_100): "100",
+    "25": "25",
+    "50": "50",
+    "100": "100",
+}
 
 
 async def sabnzbd(update, context):
-    if config.get("enableAllowlist") and not checkAllowed(update,"regular"):
-        #When using this mode, bot will remain silent if user is not in the allowlist.txt
+    if root_config.get("enableAllowlist") and not checkAllowed(update, "regular"):
+        # When using this mode, bot will remain silent if user is not in the allowlist.txt
         logger.info("Allowlist is enabled, but userID isn't added into 'allowlist.txt'. So bot stays silent")
         return ConversationHandler.END
-        
+
     if not config["enable"]:
         await context.bot.send_message(
             chat_id=update.effective_message.chat_id,
@@ -34,31 +44,31 @@ async def sabnzbd(update, context):
         await context.bot.send_message(
             chat_id=update.effective_message.chat_id, text=i18n.t("addarr.Authorize")
         )
-        return SABNZBD_SPEED_LIMIT_100
+        return ConversationHandler.END
 
-    if config["onlyAdmin"] and not checkAllowed(update, "admin"):
+    if config.get("onlyAdmin") and not checkAllowed(update, "admin"):
         await context.bot.send_message(
             chat_id=update.effective_message.chat_id,
             text=i18n.t("addarr.NotAdmin"),
         )
-        return SABNZBD_SPEED_LIMIT_100
+        return ConversationHandler.END
 
     keyboard = [[
         InlineKeyboardButton(
             '\U0001F40C ' + i18n.t("addarr.Sabnzbd.Limit25"),
-            callback_data=SABNZBD_SPEED_LIMIT_25
+            callback_data=str(SABNZBD_SPEED_LIMIT_25)
         ),
         InlineKeyboardButton(
             '\U0001F40E ' + i18n.t("addarr.Sabnzbd.Limit50"),
-            callback_data=SABNZBD_SPEED_LIMIT_50
+            callback_data=str(SABNZBD_SPEED_LIMIT_50)
         ),
         InlineKeyboardButton(
             '\U0001F406 ' + i18n.t("addarr.Sabnzbd.Limit100"),
-            callback_data=SABNZBD_SPEED_LIMIT_100
+            callback_data=str(SABNZBD_SPEED_LIMIT_100)
         ),
     ]]
     markup = InlineKeyboardMarkup(keyboard)
-    update.message.reply_text(
+    await update.message.reply_text(
         i18n.t("addarr.Sabnzbd.Speed"), reply_markup=markup
     )
     return SABNZBD_SPEED_LIMIT_100
@@ -67,25 +77,35 @@ async def sabnzbd(update, context):
 async def changeSpeedSabnzbd(update, context):
     if not checkId(update):
         if (
-                await authentication(update, context) == "added"
+            await authentication(update, context) == "added"
         ):  # To also stop the beginning command
             return ConversationHandler.END
+        return ConversationHandler.END
 
-    choice = update.callback_query.data
+    if config.get("onlyAdmin") and not checkAllowed(update, "admin"):
+        await context.bot.send_message(
+            chat_id=update.effective_message.chat_id,
+            text=i18n.t("addarr.NotAdmin"),
+        )
+        return ConversationHandler.END
 
+    choice = str(update.callback_query.data)
+    if choice not in _ALLOWED_SPEED_VALUES:
+        return ConversationHandler.END
+
+    speed_pct = _ALLOWED_SPEED_VALUES[choice]
     url = generateApiQuery("sabnzbd", "",
-                           {'output': 'json', 'mode': 'config', 'name': 'speedlimit', 'value': choice})
+                           {'output': 'json', 'mode': 'config', 'name': 'speedlimit', 'value': speed_pct})
 
-    req = requests.get(url)
+    req = requests.get(url, timeout=REQUEST_TIMEOUT)
     message = None
     if req.status_code == 200:
-        if choice == SABNZBD_SPEED_LIMIT_100:
+        if choice in (str(SABNZBD_SPEED_LIMIT_100), "100"):
             message = i18n.t("addarr.Sabnzbd.ChangedTo100")
-        elif choice == SABNZBD_SPEED_LIMIT_50:
+        elif choice in (str(SABNZBD_SPEED_LIMIT_50), "50"):
             message = i18n.t("addarr.Sabnzbd.ChangedTo50")
-        elif choice == SABNZBD_SPEED_LIMIT_25:
+        elif choice in (str(SABNZBD_SPEED_LIMIT_25), "25"):
             message = i18n.t("addarr.Sabnzbd.ChangedTo25")
-
     else:
         message = i18n.t("addarr.Sabnzbd.Error")
 
@@ -95,3 +115,4 @@ async def changeSpeedSabnzbd(update, context):
     )
 
     return ConversationHandler.END
+

@@ -12,11 +12,12 @@ import sonarr
 
 class TestEndToEndMiniAppFlow(unittest.TestCase):
     def test_full_miniapp_lifecycle_flow(self):
-        # 1. Verification of User Authorization
+        # 1. Verification of User Authorization (authenticated in chatid.txt)
         user_id = "123456789"
         with patch.dict(bridge.config, {"enableAllowlist": False, "enableAdmin": False}):
-            with patch("os.path.exists", return_value=False):
-                self.assertTrue(bridge.is_user_authorized(user_id))
+            with patch("os.path.exists", return_value=True):
+                with patch("builtins.open", unittest.mock.mock_open(read_data="123456789 - testuser\n")):
+                    self.assertTrue(bridge.is_user_authorized(user_id))
 
         # 2. Search Media Action
         with patch("bridge.radarr.search", return_value=[{"title": "Dune", "tmdbId": 438631, "year": 2021, "overview": "Sci-fi epic"}]), \

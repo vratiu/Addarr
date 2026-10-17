@@ -56,11 +56,23 @@ export class BridgeService {
     return false;
   }
 
+  private generateRequestId(): string {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+      const bytes = new Uint8Array(16);
+      crypto.getRandomValues(bytes);
+      return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    }
+    return `${Date.now()}_${Math.random().toString(36).substring(2, 12)}`;
+  }
+
   /**
    * Dispatches an action over Firebase RTDB and waits for Addarr's response.
    */
   public async sendCommand<T = any>(action: string, payload: Record<string, any> = {}): Promise<T> {
-    const reqId = `${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const reqId = this.generateRequestId();
     const requestRef = ref(database, `requests/${this.userId}/${reqId}`);
     const responseRef = ref(database, `responses/${this.userId}/${reqId}`);
 
@@ -87,10 +99,11 @@ export class BridgeService {
         }
       });
 
-      // Write request
+      // Write request including signed Telegram initData
       set(requestRef, {
         action,
         payload,
+        initData: this.initData,
         username: this.username,
         timestamp: Date.now(),
       }).catch((err) => {

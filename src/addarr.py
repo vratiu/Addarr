@@ -201,7 +201,7 @@ def main():
                 MessageHandler(
                     filters.Regex(
                         re.compile(
-                            r"" + config["entrypointTransmission"] + "", re.IGNORECASE
+                            r"^" + config["entrypointTransmission"] + r"$", re.IGNORECASE
                         )
                     ),
                     transmission.transmission,
@@ -227,7 +227,7 @@ def main():
                 MessageHandler(
                     filters.Regex(
                         re.compile(
-                            r"" + config["entrypointSabnzbd"] + "", re.IGNORECASE
+                            r"^" + config["entrypointSabnzbd"] + r"$", re.IGNORECASE
                         )
                     ),
                     sabnzbd.sabnzbd,

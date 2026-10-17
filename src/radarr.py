@@ -16,13 +16,13 @@ logger = logger.getLogger("addarr.radarr", logLevel, config.get("logToConsole", 
 config = config["radarr"]
 
 addMovieNeededFields = ["tmdbId", "year", "title", "titleSlug", "images"]
+REQUEST_TIMEOUT = 15
 
 
 def search(title):
     parameters = {"term": title}
     url = commons.generateApiQuery("radarr", "movie/lookup", parameters)
-    logger.info(url)
-    req = requests.get(url)
+    req = requests.get(url, timeout=REQUEST_TIMEOUT)
     parsed_json = json.loads(req.text)
 
     if req.status_code == 200 and parsed_json:
@@ -51,19 +51,25 @@ def giveTitles(parsed_json):
 
 def inLibrary(tmdbId):
     parameters = {}
-    req = requests.get(commons.generateApiQuery("radarr", "movie", parameters))
+    req = requests.get(commons.generateApiQuery("radarr", "movie", parameters), timeout=REQUEST_TIMEOUT)
     parsed_json = json.loads(req.text)
     return next((True for movie in parsed_json if movie["tmdbId"] == tmdbId), False)
 
 
 def addToLibrary(tmdbId, path, qualityProfileId, tags):
-    parameters = {"tmdbId": str(tmdbId)}
+    parameters = {"tmdbId": str(int(tmdbId))}
     req = requests.get(
-        commons.generateApiQuery("radarr", "movie/lookup/tmdb", parameters)
+        commons.generateApiQuery("radarr", "movie/lookup/tmdb", parameters),
+        timeout=REQUEST_TIMEOUT,
     )
     parsed_json = json.loads(req.text)
     data = json.dumps(buildData(parsed_json, path, qualityProfileId, tags))
-    add = requests.post(commons.generateApiQuery("radarr", "movie"), data=data, headers={'Content-Type': 'application/json'})
+    add = requests.post(
+        commons.generateApiQuery("radarr", "movie"),
+        data=data,
+        headers={'Content-Type': 'application/json'},
+        timeout=REQUEST_TIMEOUT,
+    )
     if add.status_code == 201:
         return True
     else:
@@ -71,11 +77,16 @@ def addToLibrary(tmdbId, path, qualityProfileId, tags):
 
 
 def removeFromLibrary(tmdbId):
-    parameters = { 
+    parameters = {
         "deleteFiles": str(True)
     }
     dbId = getDbIdFromImdbId(tmdbId)
-    delete = requests.delete(commons.generateApiQuery("radarr", f"movie/{dbId}", parameters))
+    if dbId is None:
+        return False
+    delete = requests.delete(
+        commons.generateApiQuery("radarr", f"movie/{int(dbId)}", parameters),
+        timeout=REQUEST_TIMEOUT,
+    )
     if delete.status_code == 200:
         return True
     else:
@@ -98,14 +109,14 @@ def buildData(json, path, qualityProfileId, tags):
 
 def getRootFolders():
     parameters = {}
-    req = requests.get(commons.generateApiQuery("radarr", "Rootfolder", parameters))
+    req = requests.get(commons.generateApiQuery("radarr", "Rootfolder", parameters), timeout=REQUEST_TIMEOUT)
     parsed_json = json.loads(req.text)
     return parsed_json
 
 
 def all_movies():
     parameters = {}
-    req = requests.get(commons.generateApiQuery("radarr", "movie", parameters))
+    req = requests.get(commons.generateApiQuery("radarr", "movie", parameters), timeout=REQUEST_TIMEOUT)
     parsed_json = json.loads(req.text)
 
     if req.status_code == 200:
@@ -130,39 +141,44 @@ def all_movies():
 
 def getQualityProfiles():
     parameters = {}
-    req = requests.get(commons.generateApiQuery("radarr", "qualityProfile", parameters))
+    req = requests.get(commons.generateApiQuery("radarr", "qualityProfile", parameters), timeout=REQUEST_TIMEOUT)
     parsed_json = json.loads(req.text)
     return parsed_json
 
 
 def getTags():
     parameters = {}
-    req = requests.get(commons.generateApiQuery("radarr", "tag", parameters))
+    req = requests.get(commons.generateApiQuery("radarr", "tag", parameters), timeout=REQUEST_TIMEOUT)
     parsed_json = json.loads(req.text)
     return parsed_json
 
 
 def createTag(tag):
     data_json = {
-        "id": max([t["id"] for t in getTags()], default=0)+1,
+        "id": max([t["id"] for t in getTags()], default=0) + 1,
         "label": str(tag)
     }
-    add = requests.post(commons.generateApiQuery("radarr", "tag"), json=data_json, headers={'Content-Type': 'application/json'})
-    if add.status_code == 200:
+    add = requests.post(
+        commons.generateApiQuery("radarr", "tag"),
+        json=data_json,
+        headers={'Content-Type': 'application/json'},
+        timeout=REQUEST_TIMEOUT,
+    )
+    if add.status_code in (200, 201):
         return True
     else:
         return False
 
 
 def getDbIdFromImdbId(tmdbId):
-    req = requests.get(commons.generateApiQuery("radarr", "movie", {}))
+    req = requests.get(commons.generateApiQuery("radarr", "movie", {}), timeout=REQUEST_TIMEOUT)
     parsed_json = json.loads(req.text)
-    dbId = [f["id"] for f in parsed_json if f["tmdbId"] == tmdbId]
-    return dbId[0]
+    dbId = [f["id"] for f in parsed_json if f["tmdbId"] == int(tmdbId)]
+    return dbId[0] if dbId else None
 
 
 def get_library_summary():
-    req = requests.get(commons.generateApiQuery("radarr", "movie", {}))
+    req = requests.get(commons.generateApiQuery("radarr", "movie", {}), timeout=REQUEST_TIMEOUT)
     if req.status_code == 200:
         parsed_json = json.loads(req.text)
         data = []
@@ -191,8 +207,9 @@ def get_library_summary():
 
 
 def update_movie(movie_id, quality_profile_id=None, monitored=None):
-    url = commons.generateApiQuery("radarr", f"movie/{movie_id}", {})
-    req = requests.get(url)
+    safe_movie_id = int(movie_id)
+    url = commons.generateApiQuery("radarr", f"movie/{safe_movie_id}", {})
+    req = requests.get(url, timeout=REQUEST_TIMEOUT)
     if req.status_code != 200:
         return False
     movie = json.loads(req.text)
@@ -201,8 +218,13 @@ def update_movie(movie_id, quality_profile_id=None, monitored=None):
     if monitored is not None:
         movie["monitored"] = bool(monitored)
 
-    put_url = commons.generateApiQuery("radarr", f"movie/{movie_id}", {})
-    res = requests.put(put_url, json=movie, headers={'Content-Type': 'application/json'})
+    put_url = commons.generateApiQuery("radarr", f"movie/{safe_movie_id}", {})
+    res = requests.put(
+        put_url,
+        json=movie,
+        headers={'Content-Type': 'application/json'},
+        timeout=REQUEST_TIMEOUT,
+    )
     if res.status_code in (200, 202):
         return json.loads(res.text) if res.text else True
     return False

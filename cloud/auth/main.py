@@ -21,15 +21,19 @@ def verify_telegram_init_data(init_data: str, bot_token: str, max_age_seconds: i
     Returns (is_valid, user_dict).
     """
     try:
+        if not init_data or not bot_token or not isinstance(init_data, str) or len(init_data) > 4096:
+            return False, None
+
         parsed = dict(parse_qsl(init_data, keep_blank_values=True))
         if "hash" not in parsed:
             return False, None
 
         received_hash = parsed.pop("hash")
 
-        # Check auth_date for expiration
+        # Check auth_date for expiration and future clock skew
         auth_date = int(parsed.get("auth_date", 0))
-        if time.time() - auth_date > max_age_seconds:
+        now = time.time()
+        if auth_date <= 0 or (now - auth_date > max_age_seconds) or (auth_date > now + 60):
             return False, None
 
         # Build data-check-string (keys sorted alphabetically)

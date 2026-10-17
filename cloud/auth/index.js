@@ -10,16 +10,21 @@ if (!admin.apps.length) {
  * Validates Telegram WebApp initData HMAC-SHA256 signature
  */
 function verifyInitData(initData, botToken) {
+  if (!initData || typeof initData !== "string" || initData.length > 4096 || !botToken) {
+    return null;
+  }
   const params = new URLSearchParams(initData);
   const hash = params.get("hash");
   if (!hash) return null;
 
   params.delete("hash");
 
-  // Check timestamp (24 hour max age)
+  // Check timestamp (24 hour max age, max 60s future clock skew)
   const authDate = parseInt(params.get("auth_date") || "0", 10);
   const now = Math.floor(Date.now() / 1000);
-  if (now - authDate > 86400) return null;
+  if (!authDate || isNaN(authDate) || authDate <= 0 || now - authDate > 86400 || authDate > now + 60) {
+    return null;
+  }
 
   const entries = Array.from(params.entries());
   entries.sort(([a], [b]) => a.localeCompare(b));
@@ -28,8 +33,14 @@ function verifyInitData(initData, botToken) {
   const secretKey = crypto.createHmac("sha256", "WebAppData").update(botToken).digest();
   const calculatedHash = crypto.createHmac("sha256", secretKey).update(dataCheckString).digest("hex");
 
-  if (calculatedHash === hash) {
-    return JSON.parse(params.get("user") || "{}");
+  const calcBuf = Buffer.from(calculatedHash, "utf8");
+  const recvBuf = Buffer.from(String(hash), "utf8");
+  if (calcBuf.length === recvBuf.length && crypto.timingSafeEqual(calcBuf, recvBuf)) {
+    try {
+      return JSON.parse(params.get("user") || "{}");
+    } catch {
+      return null;
+    }
   }
   return null;
 }
@@ -63,6 +74,6 @@ exports.authTelegram = functions.https.onRequest(async (req, res) => {
     });
     res.status(200).json({ token: customToken, user });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Internal authentication error" });
   }
 });

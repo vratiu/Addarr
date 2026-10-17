@@ -58,24 +58,22 @@ Both Development and Production use Firebase Realtime Database as a serverless, 
    {
      "rules": {
        "requests": {
+         ".read": false,
          "$uid": {
-           ".read": "auth != null && auth.uid == $uid",
-           ".write": "auth != null && auth.uid == $uid",
            "$reqId": {
-             ".validate": "newData.hasChildren(['action', 'payload'])"
+             ".write": "!data.exists() && newData.exists() && $uid.length <= 64 && $reqId.length <= 64",
+             ".validate": "newData.hasChildren(['action', 'timestamp']) && newData.child('action').isString() && newData.child('action').val().length > 0 && newData.child('action').val().length <= 32 && newData.child('timestamp').isNumber() && (!newData.hasChild('initData') || (newData.child('initData').isString() && newData.child('initData').val().length <= 4096)) && (!newData.hasChild('username') || (newData.child('username').isString() && newData.child('username').val().length <= 64))"
            }
          }
        },
        "responses": {
+         ".read": false,
          "$uid": {
-           ".read": "auth != null && auth.uid == $uid",
-           ".write": false
-         }
-       },
-       "users": {
-         "$uid": {
-           ".read": "auth != null && auth.uid == $uid",
-           ".write": "auth != null && auth.uid == $uid"
+           ".read": false,
+           "$reqId": {
+             ".read": "$uid.length <= 64 && $reqId.length <= 64",
+             ".write": "data.exists() && !newData.exists()"
+           }
          }
        }
      }
