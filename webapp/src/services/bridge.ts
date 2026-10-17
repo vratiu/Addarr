@@ -122,12 +122,62 @@ export class BridgeService {
     return res.results || [];
   }
 
+  public async getDiscoverMovies(limit: number = 24): Promise<SearchResult[]> {
+    const CACHE_KEY = 'addarr_discover_movies_cache_v1';
+    const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+    try {
+      const cachedStr = localStorage.getItem(CACHE_KEY);
+      if (cachedStr) {
+        const cached = JSON.parse(cachedStr);
+        if (cached && cached.timestamp && Date.now() - cached.timestamp < CACHE_TTL_MS && Array.isArray(cached.items)) {
+          return cached.items.slice(0, limit);
+        }
+      }
+    } catch (e) {
+      console.warn('Could not read discover movies from local cache:', e);
+    }
+
+    const res = await this.sendCommand<{ results: SearchResult[] }>('get_discover_movies', { limit });
+    const results = res.results || [];
+
+    try {
+      localStorage.setItem(
+        CACHE_KEY,
+        JSON.stringify({
+          timestamp: Date.now(),
+          items: results,
+        })
+      );
+    } catch (e) {
+      console.warn('Could not write discover movies to local cache:', e);
+    }
+
+    return results;
+  }
+
   public async addMovie(tmdbId: number, path: string, qualityProfileId: number): Promise<boolean> {
     const res = await this.sendCommand<{ success: boolean }>('add_movie', {
       tmdbId,
       path,
       qualityProfileId,
     });
+    if (res.success) {
+      // Evict added movie from discover cache
+      try {
+        const CACHE_KEY = 'addarr_discover_movies_cache_v1';
+        const cachedStr = localStorage.getItem(CACHE_KEY);
+        if (cachedStr) {
+          const cached = JSON.parse(cachedStr);
+          if (cached && Array.isArray(cached.items)) {
+            cached.items = cached.items.filter((item: SearchResult) => item.id !== tmdbId);
+            localStorage.setItem(CACHE_KEY, JSON.stringify(cached));
+          }
+        }
+      } catch (e) {
+        console.warn('Could not evict movie from local discover cache:', e);
+      }
+    }
     return res.success;
   }
 

@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -18,6 +19,9 @@ config = config["radarr"]
 
 addMovieNeededFields = ["tmdbId", "year", "title", "titleSlug", "images"]
 REQUEST_TIMEOUT = 15
+
+DISCOVER_CACHE_TTL = 3600  # 1 hour
+_discover_cache = {"timestamp": 0.0, "items": []}
 
 
 def search(title):
@@ -72,6 +76,14 @@ def addToLibrary(tmdbId, path, qualityProfileId, tags):
         timeout=REQUEST_TIMEOUT,
     )
     if add.status_code == 201:
+        # Evict from discover suggestions cache if present
+        try:
+            target_id = int(tmdbId)
+            _discover_cache["items"] = [
+                m for m in _discover_cache.get("items", []) if m.get("id") != target_id
+            ]
+        except Exception as e:
+            logger.warning(f"Could not evict tmdbId={tmdbId} from discover cache: {e}")
         return True
     else:
         return False
@@ -280,4 +292,97 @@ def get_calendar_movies(days=60, limit=20):
             )
         data.sort(key=lambda m: (m["releaseDate"], m["title"]))
         return data[:int(limit)]
+    return False
+
+
+def get_discover_movies(limit=24):
+    """
+    Fetch movie suggestions from Radarr's Discover feed (importlist/movie)
+    with includeRecommendations=true, includeTrending=true, includePopular=true.
+    Caches results in memory for DISCOVER_CACHE_TTL (1 hour) to avoid hammering Radarr.
+    Filters out existing and excluded movies, and deduplicates by tmdbId.
+    """
+    now = time.time()
+    cached_items = _discover_cache.get("items", [])
+    cache_ts = _discover_cache.get("timestamp", 0.0)
+
+    # Return from cache if fresh and populated
+    if cached_items and (now - cache_ts < DISCOVER_CACHE_TTL):
+        return cached_items[:int(limit)]
+
+    parameters = {
+        "includeRecommendations": "true",
+        "includeTrending": "true",
+        "includePopular": "true",
+    }
+    url = commons.generateApiQuery("radarr", "importlist/movie", parameters)
+    try:
+        req = requests.get(url, timeout=REQUEST_TIMEOUT)
+    except Exception as e:
+        logger.error(f"Failed to query Radarr discover endpoint: {e}")
+        # If upstream fails but we have stale cache, return stale cache gracefully
+        if cached_items:
+            return cached_items[:int(limit)]
+        return False
+
+    if req.status_code == 200:
+        try:
+            movies = json.loads(req.text)
+        except Exception as e:
+            logger.error(f"Failed to parse Radarr discover response JSON: {e}")
+            if cached_items:
+                return cached_items[:int(limit)]
+            return False
+
+        if not isinstance(movies, list):
+            if cached_items:
+                return cached_items[:int(limit)]
+            return False
+
+        seen_tmdb_ids = set()
+        data = []
+        for movie in movies:
+            if not isinstance(movie, dict):
+                continue
+
+            # Exclude already existing or excluded titles
+            if movie.get("isExisting") or movie.get("isExcluded"):
+                continue
+
+            tmdb_id = movie.get("tmdbId")
+            if not tmdb_id:
+                continue
+
+            try:
+                tmdb_id = int(tmdb_id)
+            except (ValueError, TypeError):
+                continue
+
+            if tmdb_id in seen_tmdb_ids:
+                continue
+            seen_tmdb_ids.add(tmdb_id)
+
+            poster = None
+            for img in movie.get("images", []):
+                if isinstance(img, dict) and img.get("coverType") == "poster":
+                    poster = img.get("remoteUrl") or img.get("url")
+                    break
+
+            data.append(
+                {
+                    "id": tmdb_id,
+                    "title": movie.get("title", ""),
+                    "year": movie.get("year", 0),
+                    "overview": movie.get("overview", "") or "",
+                    "poster": poster or movie.get("remotePoster"),
+                }
+            )
+
+        _discover_cache["timestamp"] = now
+        _discover_cache["items"] = data
+        return data[:int(limit)]
+
+    # If status code not 200, return stale cache if present or False
+    if cached_items:
+        return cached_items[:int(limit)]
     return False

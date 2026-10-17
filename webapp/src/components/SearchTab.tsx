@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Loader2, Plus, Film, Tv } from 'lucide-react';
+import { Search, Loader2, Plus, Film, Tv, Sparkles } from 'lucide-react';
 import { SearchResult, MediaType, AppConfigOptions } from '../types';
 import { bridge } from '../services/bridge';
 import { QuickAddModal } from './QuickAddModal';
@@ -13,8 +13,43 @@ export const SearchTab: React.FC<SearchTabProps> = ({ mediaType, configOptions }
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
+  const [discoverSuggestions, setDiscoverSuggestions] = useState<SearchResult[]>([]);
+  const [discoverLoading, setDiscoverLoading] = useState(false);
   const [selectedItem, setSelectedItem] = useState<SearchResult | null>(null);
   const [successNotice, setSuccessNotice] = useState<string | null>(null);
+
+  // Load Discover suggestions non-blockingly when landing on Movie search
+  useEffect(() => {
+    if (mediaType !== 'movie') {
+      return;
+    }
+
+    let isMounted = true;
+    const fetchSuggestions = async () => {
+      // If we already loaded suggestions, don't trigger loader again
+      if (discoverSuggestions.length === 0) {
+        setDiscoverLoading(true);
+      }
+      try {
+        const data = await bridge.getDiscoverMovies(24);
+        if (isMounted) {
+          setDiscoverSuggestions(data);
+        }
+      } catch (err) {
+        console.warn('Could not fetch discover suggestions:', err);
+      } finally {
+        if (isMounted) {
+          setDiscoverLoading(false);
+        }
+      }
+    };
+
+    fetchSuggestions();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [mediaType]);
 
   // Debounced search trigger
   useEffect(() => {
@@ -40,6 +75,13 @@ export const SearchTab: React.FC<SearchTabProps> = ({ mediaType, configOptions }
 
   const handleAddedSuccess = () => {
     const title = selectedItem?.title;
+    const addedId = selectedItem?.id;
+
+    // Remove added movie from discover suggestions grid if present
+    if (addedId) {
+      setDiscoverSuggestions((prev) => prev.filter((item) => item.id !== addedId));
+    }
+
     setSelectedItem(null);
     setSuccessNotice(`Successfully added "${title}"!`);
     setTimeout(() => setSuccessNotice(null), 3500);
@@ -69,66 +111,140 @@ export const SearchTab: React.FC<SearchTabProps> = ({ mediaType, configOptions }
         </div>
       )}
 
-      {/* Results List */}
-      <div className="space-y-3">
-        {results.map((item) => (
-          <div
-            key={item.id}
-            onClick={() => setSelectedItem(item)}
-            className="flex items-center space-x-3 p-3 bg-tg-secondary/70 hover:bg-tg-secondary border border-gray-700/50 hover:border-tg-button/50 rounded-xl cursor-pointer transition active:scale-[0.99] shadow"
-          >
-            {item.poster ? (
-              <img
-                src={item.poster}
-                alt={item.title}
-                className="w-14 h-20 object-cover rounded-lg border border-gray-800 flex-shrink-0"
-              />
-            ) : (
-              <div className="w-14 h-20 bg-tg-bg rounded-lg flex items-center justify-center text-xs text-tg-hint flex-shrink-0">
-                {mediaType === 'movie' ? <Film className="w-5 h-5" /> : <Tv className="w-5 h-5" />}
-              </div>
-            )}
-            <div className="flex-1 min-w-0">
-              <h4 className="font-semibold text-sm leading-snug line-clamp-1">{item.title}</h4>
-              <div className="flex items-center space-x-2 text-xs text-tg-hint mt-1">
-                <span>{item.year || 'Unknown'}</span>
-                {item.seasonCount !== undefined && (
-                  <>
-                    <span>•</span>
-                    <span>{item.seasonCount} Season{item.seasonCount !== 1 ? 's' : ''}</span>
-                  </>
+      {/* When query is empty: show Discover Suggestions on Movie tab, or default prompt */}
+      {!query.trim() && (
+        <>
+          {mediaType === 'movie' ? (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-1.5 text-xs font-semibold text-tg-text">
+                  <Sparkles className="w-4 h-4 text-amber-400" />
+                  <span>Suggestions from Radarr Explore</span>
+                </div>
+                {discoverLoading && (
+                  <div className="flex items-center space-x-1 text-[11px] text-tg-hint">
+                    <Loader2 className="w-3 h-3 animate-spin text-tg-link" />
+                    <span>Loading...</span>
+                  </div>
                 )}
               </div>
-              {item.overview && (
-                <p className="text-xs text-gray-400 mt-1 line-clamp-2">
-                  {item.overview}
-                </p>
+
+              {discoverSuggestions.length > 0 ? (
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
+                  {discoverSuggestions.map((item) => (
+                    <div
+                      key={item.id}
+                      onClick={() => setSelectedItem(item)}
+                      className="group relative flex flex-col bg-tg-secondary rounded-xl overflow-hidden border border-gray-700/50 hover:border-tg-button/70 cursor-pointer transition shadow hover:shadow-lg active:scale-95"
+                    >
+                      {/* Poster Container */}
+                      <div className="relative aspect-[2/3] bg-tg-bg overflow-hidden">
+                        {item.poster ? (
+                          <img
+                            src={item.poster}
+                            alt={item.title}
+                            loading="lazy"
+                            className="w-full h-full object-cover group-hover:scale-105 transition duration-300"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex flex-col items-center justify-center text-tg-hint p-2 text-center">
+                            <Film className="w-6 h-6 mb-1" />
+                            <span className="text-[10px] line-clamp-2">{item.title}</span>
+                          </div>
+                        )}
+
+                        {/* Quick Add Button Overlay */}
+                        <div className="absolute top-1.5 right-1.5">
+                          <div className="p-1 rounded-full bg-tg-button/90 text-white shadow-md hover:scale-110 active:scale-95 transition">
+                            <Plus className="w-3.5 h-3.5" />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Title & Info */}
+                      <div className="p-2 bg-tg-secondary">
+                        <h4 className="font-semibold text-xs leading-snug line-clamp-1 group-hover:text-tg-link transition">
+                          {item.title}
+                        </h4>
+                        <div className="text-[10px] text-tg-hint mt-0.5">
+                          <span>{item.year || 'Unknown'}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                !discoverLoading && (
+                  <div className="text-center py-12 text-tg-hint text-sm">
+                    Type a title above to search Radarr.
+                  </div>
+                )
               )}
             </div>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelectedItem(item);
-              }}
-              className="p-2 rounded-xl bg-tg-button/20 text-tg-link hover:bg-tg-button hover:text-white transition flex-shrink-0"
+          ) : (
+            <div className="text-center py-12 text-tg-hint text-sm">
+              Type a title above to search Sonarr.
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Results List for Active Search */}
+      {query.trim() && (
+        <div className="space-y-3">
+          {results.map((item) => (
+            <div
+              key={item.id}
+              onClick={() => setSelectedItem(item)}
+              className="flex items-center space-x-3 p-3 bg-tg-secondary/70 hover:bg-tg-secondary border border-gray-700/50 hover:border-tg-button/50 rounded-xl cursor-pointer transition active:scale-[0.99] shadow"
             >
-              <Plus className="w-5 h-5" />
-            </button>
-          </div>
-        ))}
+              {item.poster ? (
+                <img
+                  src={item.poster}
+                  alt={item.title}
+                  className="w-14 h-20 object-cover rounded-lg border border-gray-800 flex-shrink-0"
+                />
+              ) : (
+                <div className="w-14 h-20 bg-tg-bg rounded-lg flex items-center justify-center text-xs text-tg-hint flex-shrink-0">
+                  {mediaType === 'movie' ? <Film className="w-5 h-5" /> : <Tv className="w-5 h-5" />}
+                </div>
+              )}
+              <div className="flex-1 min-w-0">
+                <h4 className="font-semibold text-sm leading-snug line-clamp-1">{item.title}</h4>
+                <div className="flex items-center space-x-2 text-xs text-tg-hint mt-1">
+                  <span>{item.year || 'Unknown'}</span>
+                  {item.seasonCount !== undefined && (
+                    <>
+                      <span>•</span>
+                      <span>{item.seasonCount} Season{item.seasonCount !== 1 ? 's' : ''}</span>
+                    </>
+                  )}
+                </div>
+                {item.overview && (
+                  <p className="text-xs text-gray-400 mt-1 line-clamp-2">
+                    {item.overview}
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedItem(item);
+                }}
+                className="p-2 rounded-xl bg-tg-button/20 text-tg-link hover:bg-tg-button hover:text-white transition flex-shrink-0"
+              >
+                <Plus className="w-5 h-5" />
+              </button>
+            </div>
+          ))}
 
-        {!loading && query.trim() && results.length === 0 && (
-          <div className="text-center py-12 text-tg-hint text-sm">
-            No matching titles found for "{query}".
-          </div>
-        )}
-
-        {!query.trim() && (
-          <div className="text-center py-12 text-tg-hint text-sm">
-            Type a title above to search {mediaType === 'movie' ? 'Radarr' : 'Sonarr'}.
-          </div>
-        )}
-      </div>
+          {!loading && results.length === 0 && (
+            <div className="text-center py-12 text-tg-hint text-sm">
+              No matching titles found for "{query}".
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Quick Add Modal */}
       {selectedItem && (
