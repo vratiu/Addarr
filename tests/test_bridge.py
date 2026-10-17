@@ -156,7 +156,7 @@ class TestBridge(unittest.TestCase):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.text = json.dumps([
-            {"tmdbId": 1, "title": "Movie 1", "year": 2024, "isExisting": False, "isExcluded": False, "images": [{"coverType": "poster", "remoteUrl": "url1"}]},
+            {"tmdbId": 1, "title": "Movie 1", "year": 2024, "imdbId": "tt001", "isExisting": False, "isExcluded": False, "images": [{"coverType": "poster", "remoteUrl": "url1"}]},
             {"tmdbId": 2, "title": "Movie 2", "year": 2024, "isExisting": True, "isExcluded": False},  # Should be filtered
             {"tmdbId": 3, "title": "Movie 3", "year": 2024, "isExisting": False, "isExcluded": True},  # Should be filtered
             {"tmdbId": 1, "title": "Movie 1 Dup", "year": 2024, "isExisting": False, "isExcluded": False},  # Duplicate
@@ -168,9 +168,17 @@ class TestBridge(unittest.TestCase):
         self.assertEqual(len(results), 2)
         self.assertEqual(results[0]["id"], 1)
         self.assertEqual(results[0]["poster"], "url1")
+        self.assertEqual(results[0]["imdbId"], "tt001")
         self.assertEqual(results[1]["id"], 4)
         self.assertEqual(results[1]["poster"], "remote4")
+        self.assertIsNone(results[1].get("imdbId"))
         self.assertEqual(mock_get.call_count, 1)
+
+        # Verify URL called with includeRecommendations=false
+        called_url = mock_get.call_args[0][0]
+        self.assertIn("includeRecommendations=false", called_url)
+        self.assertIn("includeTrending=true", called_url)
+        self.assertIn("includePopular=true", called_url)
 
         # 2nd call should hit cache and NOT call requests.get again
         cached_results = radarr.get_discover_movies(limit=1)

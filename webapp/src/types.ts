@@ -29,6 +29,7 @@ export interface SearchResult {
   overview?: string;
   poster?: string;
   seasonCount?: number;
+  imdbId?: string;
 }
 
 export interface LibraryItem {

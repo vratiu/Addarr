@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Check, Folder, Sliders, Loader2 } from 'lucide-react';
+import { X, Check, Folder, Sliders, Loader2, ExternalLink } from 'lucide-react';
 import { SearchResult, MediaType, AppConfigOptions } from '../types';
 import { bridge } from '../services/bridge';
 
@@ -30,6 +30,22 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const imdbUrl = item.imdbId
+    ? `https://www.imdb.com/title/${item.imdbId}/`
+    : item.title
+    ? `https://www.imdb.com/find/?q=${encodeURIComponent(item.title + (item.year ? ' ' + item.year : ''))}`
+    : null;
+
+  const handleOpenImdb = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!imdbUrl) return;
+    if (window.Telegram?.WebApp?.openLink) {
+      window.Telegram.WebApp.openLink(imdbUrl);
+    } else {
+      window.open(imdbUrl, '_blank', 'noopener,noreferrer');
+    }
+  };
 
   const handleAdd = async () => {
     setLoading(true);
@@ -76,7 +92,20 @@ export const QuickAddModal: React.FC<QuickAddModalProps> = ({
             </div>
           )}
           <div className="flex-1 min-w-0">
-            <h3 className="font-bold text-base truncate">{item.title}</h3>
+            <div className="flex items-start justify-between gap-1">
+              <h3 className="font-bold text-base truncate flex-1">{item.title}</h3>
+              {imdbUrl && (
+                <button
+                  type="button"
+                  onClick={handleOpenImdb}
+                  className="inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-[#f5c518] hover:bg-[#e2b616] text-black font-extrabold text-[11px] leading-tight transition shadow-sm flex-shrink-0 cursor-pointer active:scale-95"
+                  title="View on IMDb"
+                >
+                  <span>IMDb</span>
+                  <ExternalLink className="w-3 h-3" />
+                </button>
+              )}
+            </div>
             <p className="text-xs text-tg-hint mt-0.5">{item.year || 'Unknown'}</p>
             {item.overview && (
               <p className="text-xs text-gray-400 mt-2 line-clamp-2">

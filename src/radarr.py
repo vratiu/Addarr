@@ -49,6 +49,7 @@ def giveTitles(parsed_json):
                     "poster": movie.get("remotePoster", None),
                     "year": movie["year"],
                     "id": movie["tmdbId"],
+                    "imdbId": movie.get("imdbId"),
                 }
             )
     return data
@@ -311,7 +312,7 @@ def get_discover_movies(limit=24):
         return cached_items[:int(limit)]
 
     parameters = {
-        "includeRecommendations": "true",
+        "includeRecommendations": "false",
         "includeTrending": "true",
         "includePopular": "true",
     }
@@ -375,6 +376,7 @@ def get_discover_movies(limit=24):
                     "year": movie.get("year", 0),
                     "overview": movie.get("overview", "") or "",
                     "poster": poster or movie.get("remotePoster"),
+                    "imdbId": movie.get("imdbId"),
                 }
             )
 

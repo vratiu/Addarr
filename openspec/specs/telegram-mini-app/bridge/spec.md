@@ -48,3 +48,7 @@ The bridge SHALL execute dispatched actions locally against media services and r
 #### Scenario: Calendar series command execution
 - **WHEN** a valid `get_calendar_series` command is received from an authorized user
 - **THEN** the bridge queries local Sonarr for upcoming episode releases within the next 60 days (grouped by same-day series drops and capped at 20 items) and writes the result list back to the response queue
+
+#### Scenario: Discover movies command execution
+- **WHEN** a valid `get_discover_movies` command is received by the bridge
+- **THEN** the bridge retrieves up to 24 cached or fresh Radarr discover movie suggestions and writes the formatted result payload (`results`) back to the response queue

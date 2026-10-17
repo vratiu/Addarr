@@ -1,17 +1,16 @@
-# Spec Delta
+# media-management/movie-discovery Specification
 
 ## Purpose
+Provides movie discovery suggestions from Radarr's Explore/Discover feeds (specifically trending and popular titles, excluding library recommendations) with 1-hour caching and IMDb metadata to prevent excessive upstream queries.
 
-Provides movie discovery suggestions from Radarr's Explore/Discover feeds (combining recommendations, trending, and popular titles) with 1-hour caching to prevent excessive upstream queries.
-
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Fetch Discover Movie Suggestions
-The system SHALL query Radarr's `importlist/movie` endpoint with `includeRecommendations=true`, `includeTrending=true`, and `includePopular=true`, exclude existing or excluded movies, deduplicate by `tmdbId`, and return up to 24 movie suggestions.
+The system SHALL query Radarr's `importlist/movie` endpoint with `includeTrending=true`, `includePopular=true`, and `includeRecommendations=false`, exclude existing or excluded movies, deduplicate by `tmdbId`, and return up to 24 movie suggestions with IMDb metadata.
 
-#### Scenario: Retrieve combined discover feeds
+#### Scenario: Retrieve trending and popular discover feeds
 - **WHEN** movie discovery suggestions are requested and the cache is empty or expired
-- **THEN** the system queries Radarr with all three discover feeds enabled, filters out items where `isExisting` or `isExcluded` is true, deduplicates by `tmdbId`, and returns at most 24 items with `id` (`tmdbId`), `title`, `year`, `overview`, and `poster`
+- **THEN** the system queries Radarr with `includeTrending=true`, `includePopular=true`, and `includeRecommendations=false`, filters out items where `isExisting` or `isExcluded` is true, deduplicates by `tmdbId`, and returns at most 24 items with `id` (`tmdbId`), `title`, `year`, `overview`, `poster`, and `imdbId` (when available)
 
 ### Requirement: Cache Discover Suggestions for One Hour
 The system SHALL cache the discover movie suggestions for 1 hour (3600 seconds) so Radarr's discover endpoint is queried at most once per hour.
