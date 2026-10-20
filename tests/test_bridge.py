@@ -54,12 +54,27 @@ class TestBridge(unittest.TestCase):
     @patch("bridge.radarr.giveTitles")
     def test_dispatch_search_movie(self, mock_titles, mock_search):
         mock_search.return_value = [{"title": "Alien"}]
-        mock_titles.return_value = [{"title": "Alien", "year": 1979}]
+        mock_titles.return_value = [{"title": "Alien", "year": 1979, "id": 348, "inLibrary": True, "libraryId": 5}]
 
         res = bridge.dispatch_action("search_movie", {"term": "Alien"})
         self.assertTrue(res["success"])
         self.assertEqual(len(res["results"]), 1)
         self.assertEqual(res["results"][0]["title"], "Alien")
+        self.assertTrue(res["results"][0]["inLibrary"])
+        self.assertEqual(res["results"][0]["libraryId"], 5)
+
+    @patch("bridge.sonarr.search")
+    @patch("bridge.sonarr.giveTitles")
+    def test_dispatch_search_series(self, mock_titles, mock_search):
+        mock_search.return_value = [{"title": "Severance"}]
+        mock_titles.return_value = [{"title": "Severance", "year": 2022, "id": 999, "inLibrary": True, "libraryId": 12}]
+
+        res = bridge.dispatch_action("search_series", {"term": "Severance"})
+        self.assertTrue(res["success"])
+        self.assertEqual(len(res["results"]), 1)
+        self.assertEqual(res["results"][0]["title"], "Severance")
+        self.assertTrue(res["results"][0]["inLibrary"])
+        self.assertEqual(res["results"][0]["libraryId"], 12)
 
     @patch("bridge.radarr.update_movie")
     def test_dispatch_update_movie(self, mock_update):

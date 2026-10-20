@@ -248,6 +248,144 @@ class TestLibraryMutations(unittest.TestCase):
         self.assertEqual(results[1]["title"], "Movie In 10 Days")
         self.assertEqual(results[1]["releaseDate"], in_10_days)
 
+    @patch("radarr.requests.get")
+    def test_radarr_give_titles_enrichment(self, mock_get):
+        # 1. Existing movie with id > 0 where lookup has hasFile=False, but detailed GET /movie/{id} returns hasFile=True
+        existing_lookup = [
+            {
+                "id": 42,
+                "tmdbId": 550,
+                "title": "Fight Club",
+                "year": 1999,
+                "overview": "An insomniac office worker...",
+                "images": [{"coverType": "poster", "remoteUrl": "https://img/poster.jpg"}],
+                "hasFile": False,
+                "monitored": True,
+                "imdbId": "tt0137523"
+            }
+        ]
+        detailed_movie = {
+            "id": 42,
+            "tmdbId": 550,
+            "title": "Fight Club",
+            "qualityProfileId": 3,
+            "monitored": True,
+            "status": "released",
+            "hasFile": True,
+            "sizeOnDisk": 4500000000
+        }
+        mock_res = MagicMock()
+        mock_res.status_code = 200
+        mock_res.text = json.dumps(detailed_movie)
+        mock_get.return_value = mock_res
+
+        titles = radarr.giveTitles(existing_lookup)
+        self.assertEqual(len(titles), 1)
+        item = titles[0]
+        self.assertEqual(item["id"], 550)  # id remains tmdbId
+        self.assertTrue(item["inLibrary"])
+        self.assertEqual(item["libraryId"], 42)
+        self.assertEqual(item["qualityProfileId"], 3)
+        self.assertTrue(item["monitored"])
+        self.assertTrue(item["hasFile"])
+        self.assertEqual(item["poster"], "https://img/poster.jpg")
+        self.assertEqual(item["imdbId"], "tt0137523")
+
+        # 2. Non-existing movie with id == 0 or missing
+        new_lookup = [
+            {
+                "id": 0,
+                "tmdbId": 999,
+                "title": "New Movie",
+                "year": 2026,
+                "overview": "Brand new movie",
+                "remotePoster": "https://img/new.jpg"
+            }
+        ]
+        new_titles = radarr.giveTitles(new_lookup)
+        self.assertEqual(len(new_titles), 1)
+        new_item = new_titles[0]
+        self.assertEqual(new_item["id"], 999)
+        self.assertFalse(new_item["inLibrary"])
+        self.assertNotIn("libraryId", new_item)
+
+    @patch("sonarr.requests.get")
+    def test_sonarr_give_titles_enrichment(self, mock_get):
+        # 1. Existing series with id > 0 where lookup lacks episodeFileCount, but detailed GET /series/{id} returns episodeFileCount > 0
+        existing_lookup = [
+            {
+                "id": 88,
+                "tvdbId": 121361,
+                "title": "Game of Thrones",
+                "year": 2011,
+                "overview": "Seven noble families fight for control...",
+                "images": [{"coverType": "poster", "remoteUrl": "https://img/got.jpg"}],
+                "statistics": {
+                    "seasonCount": 8,
+                    "episodeCount": 73,
+                    "episodeFileCount": 0
+                }
+            }
+        ]
+        detailed_series = {
+            "id": 88,
+            "tvdbId": 121361,
+            "title": "Game of Thrones",
+            "qualityProfileId": 2,
+            "monitored": True,
+            "status": "ended",
+            "statistics": {
+                "seasonCount": 8,
+                "episodeCount": 73,
+                "episodeFileCount": 73
+            },
+            "seasons": [
+                {"seasonNumber": 1, "monitored": True}
+            ]
+        }
+        mock_res = MagicMock()
+        mock_res.status_code = 200
+        mock_res.text = json.dumps(detailed_series)
+        mock_get.return_value = mock_res
+
+        titles = sonarr.giveTitles(existing_lookup)
+        self.assertEqual(len(titles), 1)
+        item = titles[0]
+        self.assertEqual(item["id"], 121361)  # id remains tvdbId
+        self.assertTrue(item["inLibrary"])
+        self.assertEqual(item["libraryId"], 88)
+        self.assertEqual(item["qualityProfileId"], 2)
+        self.assertTrue(item["monitored"])
+        self.assertEqual(item["seasonCount"], 8)
+        self.assertEqual(item["episodeFileCount"], 73)
+        self.assertEqual(item["poster"], "https://img/got.jpg")
+        self.assertEqual(len(item["seasons"]), 1)
+
+        # 2. Non-existing series with id == 0 or missing
+        new_lookup = [
+            {
+                "id": 0,
+                "tvdbId": 54321,
+                "title": "New Series",
+                "year": 2026,
+                "overview": "Upcoming show",
+                "remotePoster": "https://img/show.jpg",
+                "monitored": False,
+                "status": "continuing",
+                "statistics": {
+                    "seasonCount": 1,
+                    "episodeCount": 10,
+                    "episodeFileCount": 0
+                }
+            }
+        ]
+        new_titles = sonarr.giveTitles(new_lookup)
+        self.assertEqual(len(new_titles), 1)
+        new_item = new_titles[0]
+        self.assertEqual(new_item["id"], 54321)
+        self.assertFalse(new_item["inLibrary"])
+        self.assertNotIn("libraryId", new_item)
+
     @patch("sonarr.requests.get")
     def test_sonarr_get_calendar_series(self, mock_get):
         today = datetime.now(timezone.utc).date()

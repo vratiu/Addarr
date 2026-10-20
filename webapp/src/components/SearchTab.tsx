@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { Search, Loader2, Plus, Film, Tv, Sparkles } from 'lucide-react';
-import { SearchResult, MediaType, AppConfigOptions } from '../types';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Search, Loader2, Plus, Film, Tv, Sparkles, CheckCircle, AlertCircle, EyeOff } from 'lucide-react';
+import { SearchResult, LibraryItem, MediaType, AppConfigOptions } from '../types';
 import { bridge } from '../services/bridge';
 import { QuickAddModal } from './QuickAddModal';
+import { PreferenceModal } from './PreferenceModal';
 
 interface SearchTabProps {
   mediaType: MediaType;
@@ -16,7 +17,24 @@ export const SearchTab: React.FC<SearchTabProps> = ({ mediaType, configOptions }
   const [discoverSuggestions, setDiscoverSuggestions] = useState<SearchResult[]>([]);
   const [discoverLoading, setDiscoverLoading] = useState(false);
   const [selectedItem, setSelectedItem] = useState<SearchResult | null>(null);
+  const [editingLibraryItem, setEditingLibraryItem] = useState<LibraryItem | null>(null);
   const [successNotice, setSuccessNotice] = useState<string | null>(null);
+
+  const runSearch = useCallback(async (searchQuery: string, type: MediaType) => {
+    if (!searchQuery.trim()) {
+      setResults([]);
+      return;
+    }
+    setLoading(true);
+    try {
+      const data = await bridge.searchMedia(type, searchQuery.trim());
+      setResults(data);
+    } catch (err) {
+      console.error('Search failed:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   // Load Discover suggestions non-blockingly when landing on Movie search
   useEffect(() => {
@@ -58,20 +76,37 @@ export const SearchTab: React.FC<SearchTabProps> = ({ mediaType, configOptions }
       return;
     }
 
-    const timer = setTimeout(async () => {
-      setLoading(true);
-      try {
-        const data = await bridge.searchMedia(mediaType, query.trim());
-        setResults(data);
-      } catch (err) {
-        console.error('Search failed:', err);
-      } finally {
-        setLoading(false);
-      }
+    const timer = setTimeout(() => {
+      runSearch(query, mediaType);
     }, 450);
 
     return () => clearTimeout(timer);
-  }, [query, mediaType]);
+  }, [query, mediaType, runSearch]);
+
+  const handleItemClick = (item: SearchResult) => {
+    if (item.inLibrary && item.libraryId) {
+      const libItem: LibraryItem = {
+        id: item.libraryId,
+        tmdbId: mediaType === 'movie' ? item.id : undefined,
+        tvdbId: mediaType === 'series' ? item.id : undefined,
+        title: item.title,
+        year: item.year,
+        poster: item.poster,
+        qualityProfileId: item.qualityProfileId || 1,
+        monitored: item.monitored ?? true,
+        status: item.status || 'released',
+        hasFile: item.hasFile,
+        sizeOnDisk: item.sizeOnDisk,
+        seasonCount: item.seasonCount,
+        episodeCount: item.episodeCount,
+        episodeFileCount: item.episodeFileCount,
+        seasons: item.seasons,
+      };
+      setEditingLibraryItem(libItem);
+    } else {
+      setSelectedItem(item);
+    }
+  };
 
   const handleAddedSuccess = () => {
     const title = selectedItem?.title;
@@ -85,6 +120,23 @@ export const SearchTab: React.FC<SearchTabProps> = ({ mediaType, configOptions }
     setSelectedItem(null);
     setSuccessNotice(`Successfully added "${title}"!`);
     setTimeout(() => setSuccessNotice(null), 3500);
+
+    // Refresh search results to reflect the newly added library status
+    if (query.trim()) {
+      runSearch(query, mediaType);
+    }
+  };
+
+  const handleUpdatedSuccess = () => {
+    const title = editingLibraryItem?.title;
+    setEditingLibraryItem(null);
+    setSuccessNotice(`Successfully updated "${title}"!`);
+    setTimeout(() => setSuccessNotice(null), 3500);
+
+    // Refresh search results to reflect preferences or removal
+    if (query.trim()) {
+      runSearch(query, mediaType);
+    }
   };
 
   return (
@@ -192,51 +244,99 @@ export const SearchTab: React.FC<SearchTabProps> = ({ mediaType, configOptions }
       {/* Results List for Active Search */}
       {query.trim() && (
         <div className="space-y-3">
-          {results.map((item) => (
-            <div
-              key={item.id}
-              onClick={() => setSelectedItem(item)}
-              className="flex items-center space-x-3 p-3 bg-tg-secondary/70 hover:bg-tg-secondary border border-gray-700/50 hover:border-tg-button/50 rounded-xl cursor-pointer transition active:scale-[0.99] shadow"
-            >
-              {item.poster ? (
-                <img
-                  src={item.poster}
-                  alt={item.title}
-                  className="w-14 h-20 object-cover rounded-lg border border-gray-800 flex-shrink-0"
-                />
-              ) : (
-                <div className="w-14 h-20 bg-tg-bg rounded-lg flex items-center justify-center text-xs text-tg-hint flex-shrink-0">
-                  {mediaType === 'movie' ? <Film className="w-5 h-5" /> : <Tv className="w-5 h-5" />}
-                </div>
-              )}
-              <div className="flex-1 min-w-0">
-                <h4 className="font-semibold text-sm leading-snug line-clamp-1">{item.title}</h4>
-                <div className="flex items-center space-x-2 text-xs text-tg-hint mt-1">
-                  <span>{item.year || 'Unknown'}</span>
-                  {item.seasonCount !== undefined && (
-                    <>
-                      <span>•</span>
-                      <span>{item.seasonCount} Season{item.seasonCount !== 1 ? 's' : ''}</span>
-                    </>
+          {results.map((item) => {
+            const isDownloaded = item.hasFile || (item.episodeFileCount !== undefined && item.episodeFileCount > 0);
+            const isMonitored = item.monitored;
+
+            return (
+              <div
+                key={item.id}
+                onClick={() => handleItemClick(item)}
+                className="flex items-center space-x-3 p-3 bg-tg-secondary/70 hover:bg-tg-secondary border border-gray-700/50 hover:border-tg-button/50 rounded-xl cursor-pointer transition active:scale-[0.99] shadow"
+              >
+                {item.poster ? (
+                  <img
+                    src={item.poster}
+                    alt={item.title}
+                    className="w-14 h-20 object-cover rounded-lg border border-gray-800 flex-shrink-0"
+                  />
+                ) : (
+                  <div className="w-14 h-20 bg-tg-bg rounded-lg flex items-center justify-center text-xs text-tg-hint flex-shrink-0">
+                    {mediaType === 'movie' ? <Film className="w-5 h-5" /> : <Tv className="w-5 h-5" />}
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center space-x-2">
+                    <h4 className="font-semibold text-sm leading-snug line-clamp-1">{item.title}</h4>
+                    {item.inLibrary && (
+                      <span
+                        className={`text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0 ${
+                          isDownloaded
+                            ? 'bg-green-950/80 text-green-400 border border-green-800/60'
+                            : isMonitored
+                            ? 'bg-yellow-950/80 text-yellow-400 border border-yellow-800/60'
+                            : 'bg-gray-800/80 text-gray-400 border border-gray-700/60'
+                        }`}
+                      >
+                        {isDownloaded ? 'Downloaded' : isMonitored ? 'Monitored' : 'Unmonitored'}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center space-x-2 text-xs text-tg-hint mt-1">
+                    <span>{item.year || 'Unknown'}</span>
+                    {item.seasonCount !== undefined && (
+                      <>
+                        <span>•</span>
+                        <span>{item.seasonCount} Season{item.seasonCount !== 1 ? 's' : ''}</span>
+                      </>
+                    )}
+                  </div>
+                  {item.overview && (
+                    <p className="text-xs text-gray-400 mt-1 line-clamp-2">
+                      {item.overview}
+                    </p>
                   )}
                 </div>
-                {item.overview && (
-                  <p className="text-xs text-gray-400 mt-1 line-clamp-2">
-                    {item.overview}
-                  </p>
+
+                {item.inLibrary ? (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleItemClick(item);
+                    }}
+                    title="Manage in Library"
+                    className={`p-2 rounded-xl transition flex-shrink-0 ${
+                      isDownloaded
+                        ? 'bg-green-950/80 border border-green-500/70 text-green-400 hover:bg-green-900/80'
+                        : isMonitored
+                        ? 'bg-yellow-950/80 border border-yellow-500/70 text-yellow-400 hover:bg-yellow-900/80'
+                        : 'bg-gray-800/80 border border-gray-600/70 text-gray-400 hover:bg-gray-700/80'
+                    }`}
+                  >
+                    {isDownloaded ? (
+                      <CheckCircle className="w-5 h-5" />
+                    ) : isMonitored ? (
+                      <AlertCircle className="w-5 h-5" />
+                    ) : (
+                      <EyeOff className="w-5 h-5" />
+                    )}
+                  </button>
+                ) : (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleItemClick(item);
+                    }}
+                    title={`Add to ${mediaType === 'movie' ? 'Radarr' : 'Sonarr'}`}
+                    className="p-2 rounded-xl bg-tg-button/20 text-tg-link hover:bg-tg-button hover:text-white transition flex-shrink-0"
+                  >
+                    <Plus className="w-5 h-5" />
+                  </button>
                 )}
               </div>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSelectedItem(item);
-                }}
-                className="p-2 rounded-xl bg-tg-button/20 text-tg-link hover:bg-tg-button hover:text-white transition flex-shrink-0"
-              >
-                <Plus className="w-5 h-5" />
-              </button>
-            </div>
-          ))}
+            );
+          })}
 
           {!loading && results.length === 0 && (
             <div className="text-center py-12 text-tg-hint text-sm">
@@ -254,6 +354,17 @@ export const SearchTab: React.FC<SearchTabProps> = ({ mediaType, configOptions }
           configOptions={configOptions}
           onClose={() => setSelectedItem(null)}
           onSuccess={handleAddedSuccess}
+        />
+      )}
+
+      {/* Preference Modal for Existing Library Items */}
+      {editingLibraryItem && (
+        <PreferenceModal
+          item={editingLibraryItem}
+          mediaType={mediaType}
+          configOptions={configOptions}
+          onClose={() => setEditingLibraryItem(null)}
+          onUpdated={handleUpdatedSuccess}
         />
       )}
     </div>

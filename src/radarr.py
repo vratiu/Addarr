@@ -42,16 +42,51 @@ def giveTitles(parsed_json):
         if all(
             x in movie for x in ["title", "overview", "year", "tmdbId"]
         ):
-            data.append(
-                {
-                    "title": movie["title"],
-                    "overview": movie["overview"],
-                    "poster": movie.get("remotePoster", None),
-                    "year": movie["year"],
-                    "id": movie["tmdbId"],
-                    "imdbId": movie.get("imdbId"),
-                }
-            )
+            poster = None
+            for img in movie.get("images", []):
+                if isinstance(img, dict) and img.get("coverType") == "poster":
+                    poster = img.get("remoteUrl") or img.get("url")
+                    break
+
+            raw_id = movie.get("id")
+            in_library = bool(raw_id and int(raw_id) > 0)
+
+            # If movie is in library, fetch actual library record to guarantee hasFile, monitored, etc. are accurate
+            lib_movie = None
+            if in_library:
+                try:
+                    lib_url = commons.generateApiQuery("radarr", f"movie/{int(raw_id)}", {})
+                    lib_res = requests.get(lib_url, timeout=REQUEST_TIMEOUT)
+                    if lib_res.status_code == 200:
+                        lib_movie = json.loads(lib_res.text)
+                except Exception as e:
+                    logger.debug(f"Could not fetch detailed movie for id {raw_id}: {e}")
+
+            item = {
+                "title": movie["title"],
+                "overview": movie["overview"],
+                "poster": poster or movie.get("remotePoster", None),
+                "year": movie["year"],
+                "id": movie["tmdbId"],
+                "imdbId": movie.get("imdbId"),
+                "inLibrary": in_library,
+            }
+
+            if in_library:
+                src = lib_movie if lib_movie else movie
+                item["libraryId"] = int(raw_id)
+                if src.get("qualityProfileId") is not None:
+                    item["qualityProfileId"] = int(src["qualityProfileId"])
+                if "monitored" in src:
+                    item["monitored"] = bool(src["monitored"])
+                if "status" in src:
+                    item["status"] = src["status"]
+                if "hasFile" in src:
+                    item["hasFile"] = bool(src["hasFile"])
+                if "sizeOnDisk" in src:
+                    item["sizeOnDisk"] = src["sizeOnDisk"]
+
+            data.append(item)
     return data
 
 

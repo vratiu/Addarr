@@ -41,17 +41,53 @@ def giveTitles(parsed_json):
             x in show
             for x in ["title", "statistics", "year", "tvdbId"]
         ):
-            data.append(
-                {
-                    "title": show["title"],
-                    "seasonCount": show["statistics"]["seasonCount"],
-                    "poster": show.get("remotePoster", None),
-                    "year": show["year"],
-                    "id": show["tvdbId"],
-                    "monitored": show["monitored"],
-                    "status": show["status"],
-                }
-            )
+            poster = None
+            for img in show.get("images", []):
+                if isinstance(img, dict) and img.get("coverType") == "poster":
+                    poster = img.get("remoteUrl") or img.get("url")
+                    break
+
+            raw_id = show.get("id")
+            in_library = bool(raw_id and int(raw_id) > 0)
+
+            # If series is in library, fetch actual library record to guarantee episodeFileCount, statistics, etc. are accurate
+            lib_show = None
+            if in_library:
+                try:
+                    lib_url = commons.generateApiQuery("sonarr", f"series/{int(raw_id)}", {})
+                    lib_res = requests.get(lib_url, timeout=REQUEST_TIMEOUT)
+                    if lib_res.status_code == 200:
+                        lib_show = json.loads(lib_res.text)
+                except Exception as e:
+                    logger.debug(f"Could not fetch detailed series for id {raw_id}: {e}")
+
+            src = lib_show if lib_show else show
+            stats = src.get("statistics", {})
+            season_count = stats.get("seasonCount", len(src.get("seasons", [])))
+            ep_count = stats.get("episodeCount", 0)
+            ep_file_count = stats.get("episodeFileCount", 0)
+
+            item = {
+                "title": show["title"],
+                "overview": show.get("overview", ""),
+                "seasonCount": season_count,
+                "poster": poster or show.get("remotePoster", None),
+                "year": show["year"],
+                "id": show["tvdbId"],
+                "monitored": src.get("monitored", True),
+                "status": src.get("status"),
+                "inLibrary": in_library,
+            }
+
+            if in_library:
+                item["libraryId"] = int(raw_id)
+                if src.get("qualityProfileId") is not None:
+                    item["qualityProfileId"] = int(src["qualityProfileId"])
+                item["episodeCount"] = ep_count
+                item["episodeFileCount"] = ep_file_count
+                item["seasons"] = src.get("seasons", [])
+
+            data.append(item)
     return data
 
 

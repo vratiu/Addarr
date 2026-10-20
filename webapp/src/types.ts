@@ -30,6 +30,16 @@ export interface SearchResult {
   poster?: string;
   seasonCount?: number;
   imdbId?: string;
+  inLibrary?: boolean;
+  libraryId?: number; // DB ID in Radarr / Sonarr
+  qualityProfileId?: number;
+  monitored?: boolean;
+  status?: string;
+  hasFile?: boolean;
+  sizeOnDisk?: number;
+  episodeCount?: number;
+  episodeFileCount?: number;
+  seasons?: Array<{ seasonNumber: number; monitored: boolean }>;
 }
 
 export interface LibraryItem {
