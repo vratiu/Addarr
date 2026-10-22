@@ -423,6 +423,11 @@ def init_firebase_app():
     import firebase_admin
     from firebase_admin import credentials
 
+    try:
+        return firebase_admin.get_app()
+    except ValueError:
+        pass
+
     miniapp_cfg = config.get("miniapp", {})
     if not miniapp_cfg.get("enable", False):
         logger.info("Telegram Mini App bridge is disabled in config.")
@@ -451,56 +456,166 @@ def init_firebase_app():
         return None
 
 
-async def start_bridge_listener():
-    """Asynchronous entry point that listens for requests on Firebase RTDB."""
+def _patch_firebase_listener_if_needed():
+    """Patch firebase_admin ListenerRegistration._start_listen to prevent unhandled thread crashes."""
+    try:
+        from firebase_admin import db
+        if getattr(db.ListenerRegistration, "_addarr_patched", False):
+            return
+
+        orig_start_listen = db.ListenerRegistration._start_listen
+
+        def safe_start_listen(self):
+            try:
+                orig_start_listen(self)
+            except Exception as e:
+                sse = getattr(self, "_sse", None)
+                if sse and not getattr(sse, "should_connect", True):
+                    # Normal intentional shutdown
+                    return
+                logger.warning(f"Bridge listener SSE stream disconnected: {_scrub_apikey(e)}")
+
+        db.ListenerRegistration._start_listen = safe_start_listen
+        db.ListenerRegistration._addarr_patched = True
+    except Exception as e:
+        logger.debug(f"Could not patch ListenerRegistration: {e}")
+
+
+def _safe_close_listener(listener):
+    """Safely close a ListenerRegistration and release underlying sessions and sockets."""
+    if not listener:
+        return
+    try:
+        sse = getattr(listener, "_sse", None)
+        if sse:
+            sse.should_connect = False
+            sse.retry = 0
+            resp = getattr(sse, "resp", None)
+            if resp:
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+            session = getattr(sse, "session", None)
+            if session:
+                try:
+                    session.close()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    try:
+        thread = getattr(listener, "_thread", None)
+        if thread:
+            thread.join(timeout=2.0)
+    except Exception:
+        pass
+
+
+def stop_bridge_listener():
+    """Explicitly stop and clean up the active bridge listener."""
+    global _listener
+    if _listener is not None:
+        _safe_close_listener(_listener)
+        _listener = None
+
+
+async def start_bridge_listener(poll_interval: float = 5.0, run_once: bool = False):
+    """Asynchronous entry point that listens for requests on Firebase RTDB with automatic supervisor recovery."""
     global _app, _listener
     miniapp_cfg = config.get("miniapp", {})
     if not miniapp_cfg.get("enable", False):
         return
 
-    app = init_firebase_app()
-    if not app:
-        return
+    _patch_firebase_listener_if_needed()
 
-    _app = app
-    from firebase_admin import db
+    backoff_delay = 5.0
+    max_backoff = 60.0
 
-    def on_request_event(event):
-        """Callback triggered on Realtime Database change events."""
-        try:
-            # Event path could be '/' (initial load), '/{userId}', or '/{userId}/{reqId}'
-            path = event.path.strip("/")
-            data = event.data
+    try:
+        while True:
+            try:
+                if not _app:
+                    _app = init_firebase_app()
+                    if not _app:
+                        logger.warning(f"Firebase app not ready. Retrying in {backoff_delay}s...")
+                        if run_once:
+                            return
+                        await asyncio.sleep(backoff_delay)
+                        backoff_delay = min(backoff_delay * 2, max_backoff)
+                        continue
 
-            if not data:
-                return
+                from firebase_admin import db
 
-            parts = [p for p in path.split("/") if p]
-            if len(parts) == 0:
-                # Top-level: dict of user_id -> dict of req_id -> request_data
-                if isinstance(data, dict):
-                    for u_id, user_reqs in data.items():
-                        if isinstance(user_reqs, dict):
-                            for r_id, req in user_reqs.items():
-                                process_request(db, u_id, r_id, req)
-            elif len(parts) == 1:
-                # /requests/{user_id}
-                u_id = parts[0]
-                if isinstance(data, dict):
-                    for r_id, req in data.items():
-                        process_request(db, u_id, r_id, req)
-            elif len(parts) == 2:
-                # /requests/{user_id}/{req_id}
-                u_id, r_id = parts[0], parts[1]
-                process_request(db, u_id, r_id, data)
-        except Exception as err:
-            logger.error(f"Error handling RTDB event: {err}", exc_info=True)
+                thread = getattr(_listener, "_thread", None) if _listener else None
+                is_alive = bool(thread and thread.is_alive())
 
-    requests_ref = db.reference("requests")
-    # listen() runs in a background thread provided by Firebase Admin
-    _listener = requests_ref.listen(on_request_event)
-    logger.info("Mini App bridge is actively listening for incoming requests.")
+                if not is_alive:
+                    if _listener is not None:
+                        logger.warning("Mini App bridge listener thread died or stopped. Reconnecting...")
+                        _safe_close_listener(_listener)
+                        _listener = None
 
-    while True:
-        await asyncio.sleep(60)
+                    def on_request_event(event):
+                        """Callback triggered on Realtime Database change events."""
+                        try:
+                            # Event path could be '/' (initial load), '/{userId}', or '/{userId}/{reqId}'
+                            path = event.path.strip("/")
+                            data = event.data
+
+                            if not data:
+                                return
+
+                            parts = [p for p in path.split("/") if p]
+                            if len(parts) == 0:
+                                # Top-level: dict of user_id -> dict of req_id -> request_data
+                                if isinstance(data, dict):
+                                    for u_id, user_reqs in data.items():
+                                        if isinstance(user_reqs, dict):
+                                            for r_id, req in user_reqs.items():
+                                                process_request(db, u_id, r_id, req)
+                            elif len(parts) == 1:
+                                # /requests/{user_id}
+                                u_id = parts[0]
+                                if isinstance(data, dict):
+                                    for r_id, req in data.items():
+                                        process_request(db, u_id, r_id, req)
+                            elif len(parts) == 2:
+                                # /requests/{user_id}/{req_id}
+                                u_id, r_id = parts[0], parts[1]
+                                process_request(db, u_id, r_id, data)
+                        except Exception as err:
+                            logger.error(f"Error handling RTDB event: {_scrub_apikey(err)}", exc_info=True)
+
+                    requests_ref = db.reference("requests")
+                    # listen() runs in a background thread provided by Firebase Admin
+                    _listener = requests_ref.listen(on_request_event)
+                    logger.info("Mini App bridge is actively listening for incoming requests.")
+                    backoff_delay = 5.0
+
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                safe_err = _scrub_apikey(e)
+                logger.warning(
+                    f"Error in Mini App bridge listener supervisor: {safe_err}. Retrying in {backoff_delay}s..."
+                )
+                if _listener is not None:
+                    _safe_close_listener(_listener)
+                    _listener = None
+                if run_once:
+                    return
+                await asyncio.sleep(backoff_delay)
+                backoff_delay = min(backoff_delay * 2, max_backoff)
+                continue
+
+            if run_once:
+                break
+
+            await asyncio.sleep(poll_interval)
+    finally:
+        if _listener is not None and not run_once:
+            _safe_close_listener(_listener)
+            _listener = None
 
